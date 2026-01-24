@@ -23,7 +23,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 // Config holds configuration
 type Config struct {
@@ -88,6 +88,7 @@ func main() {
 	// Setup routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleStatus)
+	mux.HandleFunc("/metrics", handleMetrics)
 	mux.HandleFunc("/v8/artifacts/", handleArtifacts) // Handles GET and PUT
 	mux.HandleFunc("/v8/artifacts/events", handleEvents)
 	mux.HandleFunc("/health", handleHealth)
@@ -149,14 +150,21 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	fileCount, totalBytes := getDiskUsage()
 
+	h := atomic.LoadUint64(&hits)
+	m := atomic.LoadUint64(&misses)
+	hitRate := 0.0
+	if h+m > 0 {
+		hitRate = float64(h) / float64(h+m)
+	}
+
 	stats := map[string]interface{}{
 		"server":        "goturbo",
 		"version":       Version,
 		"uptime":        time.Since(startTime).String(),
-		"cache_dir":     config.CacheDir,
 		"security":      !config.NoSecurity,
-		"hits":          atomic.LoadUint64(&hits),
-		"misses":        atomic.LoadUint64(&misses),
+		"hits":          h,
+		"misses":        m,
+		"hit_rate":      hitRate,
 		"put_success":   atomic.LoadUint64(&putSuccess),
 		"put_errors":    atomic.LoadUint64(&putErrors),
 		"cached_files":  fileCount,
@@ -166,6 +174,48 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	fileCount, totalBytes := getDiskUsage()
+	h := atomic.LoadUint64(&hits)
+	m := atomic.LoadUint64(&misses)
+	ps := atomic.LoadUint64(&putSuccess)
+	pe := atomic.LoadUint64(&putErrors)
+
+	hitRate := 0.0
+	if h+m > 0 {
+		hitRate = float64(h) / float64(h+m)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintf(w, "# HELP goturbo_hits_total Total number of cache hits\n")
+	fmt.Fprintf(w, "# TYPE goturbo_hits_total counter\n")
+	fmt.Fprintf(w, "goturbo_hits_total %d\n", h)
+
+	fmt.Fprintf(w, "# HELP goturbo_misses_total Total number of cache misses\n")
+	fmt.Fprintf(w, "# TYPE goturbo_misses_total counter\n")
+	fmt.Fprintf(w, "goturbo_misses_total %d\n", m)
+
+	fmt.Fprintf(w, "# HELP goturbo_put_success_total Total number of successful puts\n")
+	fmt.Fprintf(w, "# TYPE goturbo_put_success_total counter\n")
+	fmt.Fprintf(w, "goturbo_put_success_total %d\n", ps)
+
+	fmt.Fprintf(w, "# HELP goturbo_put_errors_total Total number of failed puts\n")
+	fmt.Fprintf(w, "# TYPE goturbo_put_errors_total counter\n")
+	fmt.Fprintf(w, "goturbo_put_errors_total %d\n", pe)
+
+	fmt.Fprintf(w, "# HELP goturbo_cached_files_count Current number of files in cache\n")
+	fmt.Fprintf(w, "# TYPE goturbo_cached_files_count gauge\n")
+	fmt.Fprintf(w, "goturbo_cached_files_count %d\n", fileCount)
+
+	fmt.Fprintf(w, "# HELP goturbo_cache_size_bytes Total size of cache in bytes\n")
+	fmt.Fprintf(w, "# TYPE goturbo_cache_size_bytes gauge\n")
+	fmt.Fprintf(w, "goturbo_cache_size_bytes %d\n", totalBytes)
+
+	fmt.Fprintf(w, "# HELP goturbo_cache_hit_rate Cache hit rate\n")
+	fmt.Fprintf(w, "# TYPE goturbo_cache_hit_rate gauge\n")
+	fmt.Fprintf(w, "goturbo_cache_hit_rate %f\n", hitRate)
 }
 
 func getDiskUsage() (int, int64) {
