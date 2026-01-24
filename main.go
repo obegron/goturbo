@@ -16,11 +16,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+const Version = "0.1.0"
 
 // Config holds configuration
 type Config struct {
@@ -32,8 +35,16 @@ type Config struct {
 	CacheMaxAge      time.Duration
 }
 
-var config Config
-var keyManager *JWKSManager
+var (
+	config     Config
+	keyManager *JWKSManager
+
+	// Metrics
+	hits       uint64
+	misses     uint64
+	putSuccess uint64
+	putErrors  uint64
+)
 
 func main() {
 	// Parse flags
@@ -76,18 +87,22 @@ func main() {
 
 	// Setup routes
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleStatus)
 	mux.HandleFunc("/v8/artifacts/", handleArtifacts) // Handles GET and PUT
 	mux.HandleFunc("/v8/artifacts/events", handleEvents)
 	mux.HandleFunc("/health", handleHealth)
 
+	// Apply Middleware
+	handler := withServerHeader(mux)
+
 	srv := &http.Server{
 		Addr:    ":" + config.Port,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Starting server on %s", config.Port)
+		log.Printf("Starting goturbo/%s on %s", Version, config.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %s\n", err)
 		}
@@ -118,6 +133,58 @@ func lookupEnvOr(key, defaultVal string) string {
 	}
 	return defaultVal
 }
+
+func withServerHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "goturbo/"+Version)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	fileCount, totalBytes := getDiskUsage()
+
+	stats := map[string]interface{}{
+		"server":        "goturbo",
+		"version":       Version,
+		"uptime":        time.Since(startTime).String(),
+		"cache_dir":     config.CacheDir,
+		"security":      !config.NoSecurity,
+		"hits":          atomic.LoadUint64(&hits),
+		"misses":        atomic.LoadUint64(&misses),
+		"put_success":   atomic.LoadUint64(&putSuccess),
+		"put_errors":    atomic.LoadUint64(&putErrors),
+		"cached_files":  fileCount,
+		"total_bytes":   totalBytes,
+		"cache_max_age": config.CacheMaxAge.String(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+func getDiskUsage() (int, int64) {
+	entries, err := os.ReadDir(config.CacheDir)
+	if err != nil {
+		return 0, 0
+	}
+	var count int
+	var size int64
+	for _, entry := range entries {
+		if info, err := entry.Info(); err == nil {
+			count++
+			size += info.Size()
+		}
+	}
+	return count, size
+}
+
+var startTime = time.Now()
 
 // --- JWKS Implementation ---
 
@@ -309,6 +376,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	path := filepath.Join(config.CacheDir, hash)
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
+		atomic.AddUint64(&misses, 1)
 		log.Printf("GET %s - Miss", hash)
 		http.NotFound(w, r)
 		return
@@ -322,6 +390,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, f)
+	atomic.AddUint64(&hits, 1)
 	log.Printf("GET %s - Hit", hash)
 }
 
@@ -330,6 +399,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if !config.NoSecurity {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
+			atomic.AddUint64(&putErrors, 1)
 			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
 			return
 		}
@@ -343,6 +413,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		})
 
 		if err != nil || !token.Valid {
+			atomic.AddUint64(&putErrors, 1)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			log.Printf("Auth failed for %s: %v", hash, err)
 			return
@@ -352,6 +423,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		if config.RequiredAudience != "" {
 			audiences, err := token.Claims.GetAudience()
 			if err != nil {
+				atomic.AddUint64(&putErrors, 1)
 				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
 				log.Printf("Auth failed for %s: failed to parse audience", hash)
 				return
@@ -365,6 +437,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 				}
 			}
 			if !validAud {
+				atomic.AddUint64(&putErrors, 1)
 				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
 				log.Printf("Auth failed for %s: invalid audience %v (required: %s)", hash, audiences, config.RequiredAudience)
 				return
@@ -378,6 +451,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	tmpPath := path + ".tmp"
 	f, err := os.Create(tmpPath)
 	if err != nil {
+		atomic.AddUint64(&putErrors, 1)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -385,18 +459,21 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	_, err = io.Copy(f, r.Body)
 	f.Close()
 	if err != nil {
+		atomic.AddUint64(&putErrors, 1)
 		os.Remove(tmpPath)
 		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
 		return
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
+		atomic.AddUint64(&putErrors, 1)
 		os.Remove(tmpPath)
 		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+	atomic.AddUint64(&putSuccess, 1)
 	log.Printf("PUT %s - Success", hash)
 }
 
