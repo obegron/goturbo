@@ -261,9 +261,9 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# TYPE goturbo_cache_size_bytes gauge\n")
 	fmt.Fprintf(w, "goturbo_cache_size_bytes %d\n", totalBytes)
 
-	fmt.Fprintf(w, "# HELP goturbo_cache_hit_rate Cache hit rate\n")
-	fmt.Fprintf(w, "# TYPE goturbo_cache_hit_rate gauge\n")
-	fmt.Fprintf(w, "goturbo_cache_hit_rate %f\n", hitRate)
+	fmt.Fprintf(w, "# HELP goturbo_cache_hit_ratio Cache hit ratio\n")
+	fmt.Fprintf(w, "# TYPE goturbo_cache_hit_ratio gauge\n")
+	fmt.Fprintf(w, "goturbo_cache_hit_ratio %f\n", hitRate)
 }
 
 func getDiskUsage() (uint64, uint64) {
@@ -487,14 +487,16 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 			if err == nil && token.Valid && config.NamespaceIsolation {
 				if claims, ok := token.Claims.(jwt.MapClaims); ok {
-					if kube, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
-						if ns, ok := kube["namespace"].(string); ok {
-							if teamID == "" {
-								teamID = ns
-							} else if teamID != ns {
-								log.Printf("GET %s Warning: URL teamId %s does not match token namespace %s", hash, teamID, ns)
-								http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
-								return
+					if kubeRaw, ok := claims["kubernetes.io"]; ok {
+						if kube, ok := kubeRaw.(map[string]interface{}); ok {
+							if ns, ok := kube["namespace"].(string); ok {
+								if teamID == "" {
+									teamID = ns
+								} else if teamID != ns {
+									log.Printf("GET %s Warning: URL teamId %s does not match token namespace %s", hash, teamID, ns)
+									http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
+									return
+								}
 							}
 						}
 					}
@@ -568,15 +570,17 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		// Extract namespace from token (if isolation is enabled)
 		if config.NamespaceIsolation {
 			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				if kube, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
-					if ns, ok := kube["namespace"].(string); ok {
-						if teamID == "" {
-							teamID = ns
-						} else if teamID != ns {
-							atomic.AddUint64(&putErrors, 1)
-							log.Printf("PUT %s Forbidden: URL teamId %s does not match token namespace %s", hash, teamID, ns)
-							http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
-							return
+				if kubeRaw, ok := claims["kubernetes.io"]; ok {
+					if kube, ok := kubeRaw.(map[string]interface{}); ok {
+						if ns, ok := kube["namespace"].(string); ok {
+							if teamID == "" {
+								teamID = ns
+							} else if teamID != ns {
+								atomic.AddUint64(&putErrors, 1)
+								log.Printf("PUT %s Forbidden: URL teamId %s does not match token namespace %s", hash, teamID, ns)
+								http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
+								return
+							}
 						}
 					}
 				}
