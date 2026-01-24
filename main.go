@@ -514,6 +514,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if os.IsNotExist(err) {
 		atomic.AddUint64(&misses, 1)
 		log.Printf("GET %s [%s] - Miss", hash, teamID)
+		w.Header().Set("X-Goturbo-Cache", "MISS")
 		http.NotFound(w, r)
 		return
 	}
@@ -524,6 +525,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 	defer f.Close()
 
+	w.Header().Set("X-Goturbo-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, f)
 	atomic.AddUint64(&hits, 1)
