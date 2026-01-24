@@ -219,17 +219,20 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func getDiskUsage() (int, int64) {
-	entries, err := os.ReadDir(config.CacheDir)
-	if err != nil {
-		return 0, 0
-	}
 	var count int
 	var size int64
-	for _, entry := range entries {
-		if info, err := entry.Info(); err == nil {
+	err := filepath.Walk(config.CacheDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // ignore errors
+		}
+		if !info.IsDir() {
 			count++
 			size += info.Size()
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0
 	}
 	return count, size
 }
@@ -422,17 +425,27 @@ func handleArtifacts(w http.ResponseWriter, r *http.Request) {
 }
 
 func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
+	teamID := r.URL.Query().Get("teamId")
+	if teamID == "" {
+		teamID = r.URL.Query().Get("slug") // Fallback to slug
+	}
+	if teamID == "" {
+		teamID = "default"
+	}
+	// Sanitize to prevent path traversal
+	teamID = filepath.Base(teamID)
+
 	// Open Read Access
-	path := filepath.Join(config.CacheDir, hash)
+	path := filepath.Join(config.CacheDir, teamID, hash)
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		atomic.AddUint64(&misses, 1)
-		log.Printf("GET %s - Miss", hash)
+		log.Printf("GET %s [%s] - Miss", hash, teamID)
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
-		log.Printf("GET %s - Error: %v", hash, err)
+		log.Printf("GET %s [%s] - Error: %v", hash, teamID, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -441,10 +454,19 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	w.WriteHeader(http.StatusOK)
 	io.Copy(w, f)
 	atomic.AddUint64(&hits, 1)
-	log.Printf("GET %s - Hit", hash)
+	log.Printf("GET %s [%s] - Hit", hash, teamID)
 }
 
 func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
+	teamID := r.URL.Query().Get("teamId")
+	if teamID == "" {
+		teamID = r.URL.Query().Get("slug")
+	}
+	if teamID == "" {
+		teamID = "default"
+	}
+	teamID = filepath.Base(teamID)
+
 	// Authentication
 	if !config.NoSecurity {
 		authHeader := r.Header.Get("Authorization")
@@ -465,7 +487,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		if err != nil || !token.Valid {
 			atomic.AddUint64(&putErrors, 1)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			log.Printf("Auth failed for %s: %v", hash, err)
+			log.Printf("Auth failed for %s [%s]: %v", hash, teamID, err)
 			return
 		}
 
@@ -475,7 +497,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			if err != nil {
 				atomic.AddUint64(&putErrors, 1)
 				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
-				log.Printf("Auth failed for %s: failed to parse audience", hash)
+				log.Printf("Auth failed for %s [%s]: failed to parse audience", hash, teamID)
 				return
 			}
 
@@ -489,14 +511,23 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			if !validAud {
 				atomic.AddUint64(&putErrors, 1)
 				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
-				log.Printf("Auth failed for %s: invalid audience %v (required: %s)", hash, audiences, config.RequiredAudience)
+				log.Printf("Auth failed for %s [%s]: invalid audience %v (required: %s)", hash, teamID, audiences, config.RequiredAudience)
 				return
 			}
 		}
 	}
 
+	// Ensure team directory exists
+	teamPath := filepath.Join(config.CacheDir, teamID)
+	if err := os.MkdirAll(teamPath, 0755); err != nil {
+		atomic.AddUint64(&putErrors, 1)
+		log.Printf("Failed to create team directory %s: %v", teamID, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	// Save artifact
-	path := filepath.Join(config.CacheDir, hash)
+	path := filepath.Join(teamPath, hash)
 	// Create temp file first
 	tmpPath := path + ".tmp"
 	f, err := os.Create(tmpPath)
@@ -524,7 +555,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 	w.WriteHeader(http.StatusOK)
 	atomic.AddUint64(&putSuccess, 1)
-	log.Printf("PUT %s - Success", hash)
+	log.Printf("PUT %s [%s] - Success", hash, teamID)
 }
 
 func handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -543,21 +574,20 @@ func cleanupLoop() {
 }
 
 func cleanup() {
-	entries, err := os.ReadDir(config.CacheDir)
-	if err != nil {
-		log.Printf("Error reading cache dir: %v", err)
-		return
-	}
-
 	now := time.Now()
-	for _, entry := range entries {
-		info, err := entry.Info()
+	err := filepath.Walk(config.CacheDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			continue
+			return nil
 		}
-		if now.Sub(info.ModTime()) > config.CacheMaxAge {
-			os.Remove(filepath.Join(config.CacheDir, entry.Name()))
-			log.Printf("Cleaned up %s", entry.Name())
+		if !info.IsDir() {
+			if now.Sub(info.ModTime()) > config.CacheMaxAge {
+				os.Remove(path)
+				log.Printf("Cleaned up %s", filepath.Base(path))
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("Error during cleanup walk: %v", err)
 	}
 }
