@@ -51,6 +51,8 @@ var (
 	misses     uint64
 	putSuccess uint64
 	putErrors  uint64
+	totalFiles uint64
+	totalBytes uint64
 )
 
 func main() {
@@ -70,6 +72,22 @@ func main() {
 	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {
 		log.Fatalf("Failed to create cache directory: %v", err)
 	}
+
+	// Initialize counters by walking the disk once
+	log.Printf("Initializing cache metrics from %s...", config.CacheDir)
+	var count uint64
+	var size uint64
+	filepath.Walk(config.CacheDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		count++
+		size += uint64(info.Size())
+		return nil
+	})
+	atomic.StoreUint64(&totalFiles, count)
+	atomic.StoreUint64(&totalBytes, size)
+	log.Printf("Cache initialized: %d files, %d bytes", count, size)
 
 	// Initialize Key Manager or static key
 	if !config.NoSecurity {
@@ -248,23 +266,8 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "goturbo_cache_hit_rate %f\n", hitRate)
 }
 
-func getDiskUsage() (int, int64) {
-	var count int
-	var size int64
-	err := filepath.Walk(config.CacheDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // ignore errors
-		}
-		if !info.IsDir() {
-			count++
-			size += info.Size()
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, 0
-	}
-	return count, size
+func getDiskUsage() (uint64, uint64) {
+	return atomic.LoadUint64(&totalFiles), atomic.LoadUint64(&totalBytes)
 }
 
 var startTime = time.Now()
@@ -620,6 +623,11 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 	// Save artifact
 	path := filepath.Join(teamPath, hash)
+	var oldSize int64
+	if info, err := os.Stat(path); err == nil {
+		oldSize = info.Size()
+	}
+
 	// Create temp file first
 	tmpPath := path + ".tmp"
 	f, err := os.Create(tmpPath)
@@ -629,7 +637,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		return
 	}
 
-	_, err = io.Copy(f, r.Body)
+	written, err := io.Copy(f, r.Body)
 	f.Close()
 	if err != nil {
 		atomic.AddUint64(&putErrors, 1)
@@ -643,6 +651,15 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		os.Remove(tmpPath)
 		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
 		return
+	}
+
+	// Update counters
+	if oldSize == 0 {
+		atomic.AddUint64(&totalFiles, 1)
+	}
+	atomic.AddUint64(&totalBytes, uint64(written))
+	if oldSize > 0 {
+		atomic.AddUint64(&totalBytes, ^uint64(oldSize-1)) // Subtraction via two's complement
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -673,8 +690,12 @@ func cleanup() {
 		}
 		if !info.IsDir() {
 			if now.Sub(info.ModTime()) > config.CacheMaxAge {
-				os.Remove(path)
-				log.Printf("Cleaned up %s", filepath.Base(path))
+				size := info.Size()
+				if err := os.Remove(path); err == nil {
+					atomic.AddUint64(&totalFiles, ^uint64(0)) // -1
+					atomic.AddUint64(&totalBytes, ^uint64(size-1))
+					log.Printf("Cleaned up %s", filepath.Base(path))
+				}
 			}
 		}
 		return nil
