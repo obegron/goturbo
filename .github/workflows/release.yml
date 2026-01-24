@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -46,9 +46,28 @@ jobs:
           go build -o "$BINARY_NAME" main.go
           echo "BINARY_PATH=$BINARY_NAME" >> $GITHUB_ENV
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_PATH }}
+          path: ${{ env.BINARY_PATH }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.BINARY_PATH }}
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
