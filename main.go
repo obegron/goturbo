@@ -23,7 +23,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.1.1"
+const Version = "0.2.0"
 
 // Config holds configuration
 type Config struct {
