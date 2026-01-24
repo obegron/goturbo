@@ -26,7 +26,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Config holds configuration
 type Config struct {
@@ -37,6 +37,7 @@ type Config struct {
 	PublicKeyPath      string
 	NoSecurity         bool
 	InsecureSkipVerify bool
+	NamespaceIsolation bool
 	CacheMaxAge        time.Duration
 }
 
@@ -61,6 +62,7 @@ func main() {
 	flag.StringVar(&config.PublicKeyPath, "public-key-path", lookupEnvOr("PUBLIC_KEY_PATH", ""), "Path to static RSA public key (PEM)")
 	flag.BoolVar(&config.NoSecurity, "no-security", false, "Disable authentication checks")
 	flag.BoolVar(&config.InsecureSkipVerify, "insecure-skip-verify", false, "Skip TLS verification for OIDC discovery")
+	flag.BoolVar(&config.NamespaceIsolation, "namespace-isolation", false, "Use Kubernetes namespace as team ID for isolation")
 	flag.DurationVar(&config.CacheMaxAge, "cache-max-age", 24*time.Hour, "Max age for cache retention")
 	flag.Parse()
 
@@ -462,12 +464,45 @@ func handleArtifacts(w http.ResponseWriter, r *http.Request) {
 func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	teamID := r.URL.Query().Get("teamId")
 	if teamID == "" {
-		teamID = r.URL.Query().Get("slug") // Fallback to slug
+		teamID = r.URL.Query().Get("slug")
 	}
+
+	// Authentication for Read (if enabled)
+	if !config.NoSecurity {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" {
+			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+				if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
+				if staticKey != nil {
+					return staticKey, nil
+				}
+				return keyManager.GetKey(token)
+			})
+
+			if err == nil && token.Valid && config.NamespaceIsolation {
+				if claims, ok := token.Claims.(jwt.MapClaims); ok {
+					if kube, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
+						if ns, ok := kube["namespace"].(string); ok {
+							if teamID == "" {
+								teamID = ns
+							} else if teamID != ns {
+								log.Printf("GET %s Warning: URL teamId %s does not match token namespace %s", hash, teamID, ns)
+								http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if teamID == "" {
 		teamID = "default"
 	}
-	// Sanitize to prevent path traversal
 	teamID = filepath.Base(teamID)
 
 	// Open Read Access
@@ -497,10 +532,6 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if teamID == "" {
 		teamID = r.URL.Query().Get("slug")
 	}
-	if teamID == "" {
-		teamID = "default"
-	}
-	teamID = filepath.Base(teamID)
 
 	// Authentication
 	if !config.NoSecurity {
@@ -529,6 +560,24 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			return
 		}
 
+		// Extract namespace from token (if isolation is enabled)
+		if config.NamespaceIsolation {
+			if claims, ok := token.Claims.(jwt.MapClaims); ok {
+				if kube, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
+					if ns, ok := kube["namespace"].(string); ok {
+						if teamID == "" {
+							teamID = ns
+						} else if teamID != ns {
+							atomic.AddUint64(&putErrors, 1)
+							log.Printf("PUT %s Forbidden: URL teamId %s does not match token namespace %s", hash, teamID, ns)
+							http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
+							return
+						}
+					}
+				}
+			}
+		}
+
 		// Audience Check
 		if config.RequiredAudience != "" {
 			audiences, err := token.Claims.GetAudience()
@@ -554,6 +603,11 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			}
 		}
 	}
+
+	if teamID == "" {
+		teamID = "default"
+	}
+	teamID = filepath.Base(teamID)
 
 	// Ensure team directory exists
 	teamPath := filepath.Join(config.CacheDir, teamID)
