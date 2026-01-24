@@ -6,14 +6,6 @@ goturbo
 *.so
 *.dylib
 
-# Test artifacts
-test-artifact.txt
-secure-artifact.txt
-goturbo.log
-goturbo-fresh.log
-k3s-public-key.pem
-k3s-private-key.pem
-
 # OS metadata
 .DS_Store
 Thumbs.db
@@ -22,6 +14,3 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Local cache
-/cache/
-/tmp/turbo-cache/
