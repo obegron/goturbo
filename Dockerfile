@@ -19,7 +19,9 @@ COPY main.go .
 
 # Build the binary
 # CGO_ENABLED=0 creates a statically linked binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o goturbo main.go
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o goturbo main.go
 
 # Create the cache directory structure in the builder stage
 RUN mkdir -p /tmp/turbo-cache
