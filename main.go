@@ -535,6 +535,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 }
 
 func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
+	defer r.Body.Close()
 	teamID := r.URL.Query().Get("teamId")
 	if teamID == "" {
 		teamID = r.URL.Query().Get("slug")
@@ -663,9 +664,12 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if oldSize == 0 {
 		atomic.AddUint64(&totalFiles, 1)
 	}
-	atomic.AddUint64(&totalBytes, uint64(written))
-	if oldSize > 0 {
-		atomic.AddUint64(&totalBytes, ^uint64(oldSize-1)) // Subtraction via two's complement
+
+	delta := int64(written) - oldSize
+	if delta > 0 {
+		atomic.AddUint64(&totalBytes, uint64(delta))
+	} else if delta < 0 {
+		atomic.AddUint64(&totalBytes, ^uint64(-delta-1))
 	}
 
 	w.WriteHeader(http.StatusOK)
