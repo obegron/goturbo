@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
@@ -27,17 +30,20 @@ const Version = "0.2.0"
 
 // Config holds configuration
 type Config struct {
-	Port             string
-	CacheDir         string
-	TrustedIssuers   string
-	RequiredAudience string
-	NoSecurity       bool
-	CacheMaxAge      time.Duration
+	Port               string
+	CacheDir           string
+	TrustedIssuers     string
+	RequiredAudience   string
+	PublicKeyPath      string
+	NoSecurity         bool
+	InsecureSkipVerify bool
+	CacheMaxAge        time.Duration
 }
 
 var (
 	config     Config
 	keyManager *JWKSManager
+	staticKey  *rsa.PublicKey
 
 	// Metrics
 	hits       uint64
@@ -52,7 +58,9 @@ func main() {
 	flag.StringVar(&config.CacheDir, "cache-dir", lookupEnvOr("CACHE_DIR", "/tmp/turbo-cache"), "Directory for cache storage")
 	flag.StringVar(&config.TrustedIssuers, "trusted-issuers", lookupEnvOr("TRUSTED_ISSUERS", ""), "Comma-separated list of trusted issuer URLs")
 	flag.StringVar(&config.RequiredAudience, "required-audience", lookupEnvOr("REQUIRED_AUDIENCE", ""), "Required Audience (aud) claim in JWT")
+	flag.StringVar(&config.PublicKeyPath, "public-key-path", lookupEnvOr("PUBLIC_KEY_PATH", ""), "Path to static RSA public key (PEM)")
 	flag.BoolVar(&config.NoSecurity, "no-security", false, "Disable authentication checks")
+	flag.BoolVar(&config.InsecureSkipVerify, "insecure-skip-verify", false, "Skip TLS verification for OIDC discovery")
 	flag.DurationVar(&config.CacheMaxAge, "cache-max-age", 24*time.Hour, "Max age for cache retention")
 	flag.Parse()
 
@@ -61,19 +69,39 @@ func main() {
 		log.Fatalf("Failed to create cache directory: %v", err)
 	}
 
-	// Initialize Key Manager if security is enabled
+	// Initialize Key Manager or static key
 	if !config.NoSecurity {
-		if config.TrustedIssuers == "" {
-			log.Fatal("Security is enabled but no trusted issuers provided. Use --trusted-issuers or --no-security.")
-		}
-		issuers := strings.Split(config.TrustedIssuers, ",")
-		var cleanedIssuers []string
-		for _, iss := range issuers {
-			if trimmed := strings.TrimSpace(iss); trimmed != "" {
-				cleanedIssuers = append(cleanedIssuers, trimmed)
+		if config.PublicKeyPath != "" {
+			keyData, err := os.ReadFile(config.PublicKeyPath)
+			if err != nil {
+				log.Fatalf("Failed to read public key: %v", err)
 			}
+			block, _ := pem.Decode(keyData)
+			if block == nil {
+				log.Fatal("Failed to decode PEM block")
+			}
+			pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+			if err != nil {
+				log.Fatalf("Failed to parse public key: %v", err)
+			}
+			var ok bool
+			staticKey, ok = pub.(*rsa.PublicKey)
+			if !ok {
+				log.Fatal("Public key is not RSA")
+			}
+			log.Printf("Using static public key from %s", config.PublicKeyPath)
+		} else if config.TrustedIssuers != "" {
+			issuers := strings.Split(config.TrustedIssuers, ",")
+			var cleanedIssuers []string
+			for _, iss := range issuers {
+				if trimmed := strings.TrimSpace(iss); trimmed != "" {
+					cleanedIssuers = append(cleanedIssuers, trimmed)
+				}
+			}
+			keyManager = NewJWKSManager(cleanedIssuers)
+		} else {
+			log.Fatal("Security is enabled but no trusted issuers or public key provided. Use --trusted-issuers, --public-key-path, or --no-security.")
 		}
-		keyManager = NewJWKSManager(cleanedIssuers)
 
 		if config.RequiredAudience != "" {
 			log.Printf("Enforcing audience: %s", config.RequiredAudience)
@@ -316,9 +344,16 @@ func (m *JWKSManager) GetKey(token *jwt.Token) (interface{}, error) {
 }
 
 func (m *JWKSManager) refreshKeys(issuer string) error {
+	client := &http.Client{}
+	if config.InsecureSkipVerify {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
 	// 1. OIDC Discovery
 	wellKnownURL := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
-	resp, err := http.Get(wellKnownURL)
+	resp, err := client.Get(wellKnownURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch discovery config: %w", err)
 	}
@@ -336,7 +371,7 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 	}
 
 	// 2. Fetch JWKS
-	jwksResp, err := http.Get(config.JwksURI)
+	jwksResp, err := client.Get(config.JwksURI)
 	if err != nil {
 		return fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
@@ -480,6 +515,9 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			if staticKey != nil {
+				return staticKey, nil
 			}
 			return keyManager.GetKey(token)
 		})
