@@ -172,7 +172,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Starting goturbo/%s on %s", Version, config.Port)
+		log.Printf("Starting goTurbo/%s on %s", Version, config.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %s\n", err)
 		}
@@ -230,7 +230,7 @@ func lookupEnvDuration(key string, defaultVal time.Duration) time.Duration {
 
 func withServerHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Server", "goturbo/"+Version)
+		w.Header().Set("Server", "goTurbo/"+Version)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -251,7 +251,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := map[string]interface{}{
-		"server":        "goturbo",
+		"server":        "goTurbo",
 		"version":       Version,
 		"uptime":        time.Since(startTime).String(),
 		"security":      !config.NoSecurity,
@@ -651,7 +651,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if os.IsNotExist(err) {
 		atomic.AddUint64(&misses, 1)
 		log.Printf("GET %s [%s] - Miss", hash, teamID)
-		w.Header().Set("X-Goturbo-Cache", "MISS")
+		w.Header().Set("X-goTurbo-Cache", "MISS")
 		http.NotFound(w, r)
 		return
 	}
@@ -662,7 +662,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 	defer f.Close()
 	start := time.Now()
-	w.Header().Set("X-Goturbo-Cache", "HIT")
+	w.Header().Set("X-goTurbo-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
 	n, _ := io.Copy(w, f)
 	duration := time.Since(start)
