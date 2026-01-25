@@ -27,7 +27,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.3.2"
+const Version = "0.4.0"
 
 // Config holds configuration
 type Config struct {
@@ -36,6 +36,9 @@ type Config struct {
 	TrustedIssuers     string
 	RequiredAudience   string
 	PublicKeyPath      string
+	RolePattern        string
+	RoleClaimPath      string
+	AdminRoles         string
 	NoSecurity         bool
 	NoSecurityRead     bool
 	InsecureSkipVerify bool
@@ -69,6 +72,9 @@ func main() {
 	flag.BoolVar(&config.InsecureSkipVerify, "insecure-skip-verify", lookupEnvBool("INSECURE_SKIP_VERIFY", false), "Skip TLS verification for OIDC discovery")
 	flag.BoolVar(&config.NamespaceIsolation, "namespace-isolation", lookupEnvBool("NAMESPACE_ISOLATION", false), "Use Kubernetes namespace as team ID for isolation")
 	flag.DurationVar(&config.CacheMaxAge, "cache-max-age", lookupEnvDuration("CACHE_MAX_AGE", 24*time.Hour), "Max age for cache retention")
+	flag.StringVar(&config.RolePattern, "role-pattern", lookupEnvOr("ROLE_PATTERN", ""), "AD role pattern for namespace access something-{namespace}-something (use {namespace} as placeholder e.g , e.g., 'sec-role-{namespace}-dev'))")
+	flag.StringVar(&config.RoleClaimPath, "role-claim-path", lookupEnvOr("ROLE_CLAIM_PATH", "groups"), "JWT claim path for roles/groups")
+	flag.StringVar(&config.AdminRoles, "admin-roles", lookupEnvOr("ADMIN_ROLES", ""), "Comma-separated list of admin roles that grant write access to all namespaces")
 	flag.Parse()
 
 	if config.NoSecurity {
@@ -468,6 +474,92 @@ func parseRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 	return &rsa.PublicKey{N: n, E: int(eInt.Int64())}, nil
 }
 
+func hasAccess(token *jwt.Token, namespace string, operation string, hash string) bool {
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return false
+	}
+
+	// 1. Check if it's a ServiceAccount (CI pipeline)
+	if saNamespace := extractServiceAccountNamespace(claims); saNamespace != "" {
+		if saNamespace == namespace {
+			return true
+		}
+	}
+
+	// 2. Check AD roles / Groups
+	roles := extractRoles(claims, config.RoleClaimPath)
+
+	// Check for admin roles
+	if config.AdminRoles != "" {
+		adminRoles := strings.Split(config.AdminRoles, ",")
+		for _, role := range roles {
+			role = strings.TrimSpace(role)
+			for _, admin := range adminRoles {
+				if role == strings.TrimSpace(admin) {
+					return true
+				}
+			}
+		}
+	}
+
+	// Check namespace-specific role
+	var requiredRole string
+	if config.RolePattern != "" {
+		requiredRole = strings.ReplaceAll(config.RolePattern, "{namespace}", namespace)
+		for _, role := range roles {
+			if role == requiredRole {
+				return true
+			}
+		}
+	}
+
+	log.Printf("%s %s [%s] - Forbidden: no matching role (required: %s, has: %v)",
+		operation, hash, namespace, requiredRole, roles)
+	return false
+}
+
+func extractServiceAccountNamespace(claims jwt.MapClaims) string {
+	if kubeRaw, ok := claims["kubernetes.io"]; ok {
+		if kube, ok := kubeRaw.(map[string]interface{}); ok {
+			if ns, ok := kube["namespace"].(string); ok {
+				return ns
+			}
+		}
+	}
+	return ""
+}
+
+func extractRoles(claims jwt.MapClaims, claimPath string) []string {
+	var roles []string
+
+	parts := strings.Split(claimPath, ".")
+	var current interface{} = claims
+
+	for _, part := range parts {
+		if m, ok := current.(map[string]interface{}); ok {
+			current = m[part]
+		} else {
+			return roles
+		}
+	}
+
+	switch v := current.(type) {
+	case []interface{}:
+		for _, role := range v {
+			if s, ok := role.(string); ok {
+				roles = append(roles, s)
+			}
+		}
+	case []string:
+		roles = v
+	case string:
+		roles = append(roles, v)
+	}
+
+	return roles
+}
+
 // --- Handlers ---
 
 func handleArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -495,6 +587,10 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if teamID == "" {
 		teamID = r.URL.Query().Get("slug")
 	}
+	if teamID == "" {
+		teamID = "default"
+	}
+	teamID = filepath.Base(teamID)
 
 	// Authentication for Read (if enabled)
 	if !config.NoSecurity && !config.NoSecurityRead {
@@ -541,28 +637,13 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			}
 		}
 
-		if config.NamespaceIsolation {
-			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				if kubeRaw, ok := claims["kubernetes.io"]; ok {
-					if kube, ok := kubeRaw.(map[string]interface{}); ok {
-						if ns, ok := kube["namespace"].(string); ok {
-							if teamID == "" {
-								teamID = ns
-							} else if teamID != ns {
-								log.Printf("GET %s Warning: URL teamId %s does not match token namespace %s", hash, teamID, ns)
-								http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
-								return
-							}
-						}
-					}
-				}
-			}
+		// Check access
+		if !hasAccess(token, teamID, "GET", hash) {
+			atomic.AddUint64(&misses, 1)
+			http.Error(w, "Forbidden: no access to this namespace", http.StatusForbidden)
+			return
 		}
 	}
-	if teamID == "" {
-		teamID = "default"
-	}
-	teamID = filepath.Base(teamID)
 
 	// Open Read Access
 	path := filepath.Join(config.CacheDir, teamID, hash)
@@ -595,6 +676,10 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if teamID == "" {
 		teamID = r.URL.Query().Get("slug")
 	}
+	if teamID == "" {
+		teamID = "default"
+	}
+	teamID = filepath.Base(teamID)
 
 	// Authentication
 	if !config.NoSecurity {
@@ -623,26 +708,6 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			return
 		}
 
-		// Extract namespace from token (if isolation is enabled)
-		if config.NamespaceIsolation {
-			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				if kubeRaw, ok := claims["kubernetes.io"]; ok {
-					if kube, ok := kubeRaw.(map[string]interface{}); ok {
-						if ns, ok := kube["namespace"].(string); ok {
-							if teamID == "" {
-								teamID = ns
-							} else if teamID != ns {
-								atomic.AddUint64(&putErrors, 1)
-								log.Printf("PUT %s Forbidden: URL teamId %s does not match token namespace %s", hash, teamID, ns)
-								http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
-								return
-							}
-						}
-					}
-				}
-			}
-		}
-
 		// Audience Check
 		if config.RequiredAudience != "" {
 			audiences, err := token.Claims.GetAudience()
@@ -667,12 +732,14 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 				return
 			}
 		}
-	}
 
-	if teamID == "" {
-		teamID = "default"
+		// Check access
+		if !hasAccess(token, teamID, "PUT", hash) {
+			atomic.AddUint64(&putErrors, 1)
+			http.Error(w, "Forbidden: no access to this namespace", http.StatusForbidden)
+			return
+		}
 	}
-	teamID = filepath.Base(teamID)
 
 	// Ensure team directory exists
 	teamPath := filepath.Join(config.CacheDir, teamID)
