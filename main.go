@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +27,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.3.1"
+const Version = "0.3.2"
 
 // Config holds configuration
 type Config struct {
@@ -36,6 +37,7 @@ type Config struct {
 	RequiredAudience   string
 	PublicKeyPath      string
 	NoSecurity         bool
+	NoSecurityRead     bool
 	InsecureSkipVerify bool
 	NamespaceIsolation bool
 	CacheMaxAge        time.Duration
@@ -62,11 +64,24 @@ func main() {
 	flag.StringVar(&config.TrustedIssuers, "trusted-issuers", lookupEnvOr("TRUSTED_ISSUERS", ""), "Comma-separated list of trusted issuer URLs")
 	flag.StringVar(&config.RequiredAudience, "required-audience", lookupEnvOr("REQUIRED_AUDIENCE", ""), "Required Audience (aud) claim in JWT")
 	flag.StringVar(&config.PublicKeyPath, "public-key-path", lookupEnvOr("PUBLIC_KEY_PATH", ""), "Path to static RSA public key (PEM)")
-	flag.BoolVar(&config.NoSecurity, "no-security", false, "Disable authentication checks")
-	flag.BoolVar(&config.InsecureSkipVerify, "insecure-skip-verify", false, "Skip TLS verification for OIDC discovery")
-	flag.BoolVar(&config.NamespaceIsolation, "namespace-isolation", false, "Use Kubernetes namespace as team ID for isolation")
-	flag.DurationVar(&config.CacheMaxAge, "cache-max-age", 24*time.Hour, "Max age for cache retention")
+	flag.BoolVar(&config.NoSecurity, "no-security", lookupEnvBool("NO_SECURITY", false), "Disable authentication checks")
+	flag.BoolVar(&config.NoSecurityRead, "no-security-read", lookupEnvBool("NO_SECURITY_READ", false), "Disable authentication checks for GET/Read requests")
+	flag.BoolVar(&config.InsecureSkipVerify, "insecure-skip-verify", lookupEnvBool("INSECURE_SKIP_VERIFY", false), "Skip TLS verification for OIDC discovery")
+	flag.BoolVar(&config.NamespaceIsolation, "namespace-isolation", lookupEnvBool("NAMESPACE_ISOLATION", false), "Use Kubernetes namespace as team ID for isolation")
+	flag.DurationVar(&config.CacheMaxAge, "cache-max-age", lookupEnvDuration("CACHE_MAX_AGE", 24*time.Hour), "Max age for cache retention")
 	flag.Parse()
+
+	if config.NoSecurity {
+		log.Printf("⚠️  Security DISABLED - both read and write are open")
+	} else if config.NoSecurityRead {
+		log.Printf("🔓 Read security DISABLED - writes require authentication")
+	} else {
+		log.Printf("🔒 Security ENABLED - all operations require authentication")
+	}
+
+	if config.InsecureSkipVerify {
+		log.Println("⚠️ TLS verification for OIDC discovery DISABLED")
+	}
 
 	// Ensure cache directory exists
 	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {
@@ -179,6 +194,30 @@ func main() {
 func lookupEnvOr(key, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok {
 		return val
+	}
+	return defaultVal
+}
+
+func lookupEnvBool(key string, defaultVal bool) bool {
+	if val, ok := os.LookupEnv(key); ok {
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			log.Printf("Invalid value for %s: %v", key, err)
+			return defaultVal
+		}
+		return b
+	}
+	return defaultVal
+}
+
+func lookupEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	if val, ok := os.LookupEnv(key); ok {
+		d, err := time.ParseDuration(val)
+		if err != nil {
+			log.Printf("Invalid value for %s: %v", key, err)
+			return defaultVal
+		}
+		return d
 	}
 	return defaultVal
 }
@@ -458,32 +497,61 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 
 	// Authentication for Read (if enabled)
-	if !config.NoSecurity {
+	if !config.NoSecurity && !config.NoSecurityRead {
 		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-				}
-				if staticKey != nil {
-					return staticKey, nil
-				}
-				return keyManager.GetKey(token)
-			})
+		if authHeader == "" {
+			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+			return
+		}
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-			if err == nil && token.Valid && config.NamespaceIsolation {
-				if claims, ok := token.Claims.(jwt.MapClaims); ok {
-					if kubeRaw, ok := claims["kubernetes.io"]; ok {
-						if kube, ok := kubeRaw.(map[string]interface{}); ok {
-							if ns, ok := kube["namespace"].(string); ok {
-								if teamID == "" {
-									teamID = ns
-								} else if teamID != ns {
-									log.Printf("GET %s Warning: URL teamId %s does not match token namespace %s", hash, teamID, ns)
-									http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
-									return
-								}
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			if staticKey != nil {
+				return staticKey, nil
+			}
+			return keyManager.GetKey(token)
+		})
+
+		if err != nil || !token.Valid {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			log.Printf("Auth failed for GET %s [%s]: %v", hash, teamID, err)
+			return
+		}
+
+		// Audience Check
+		if config.RequiredAudience != "" {
+			audiences, err := token.Claims.GetAudience()
+			if err != nil {
+				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
+				return
+			}
+			validAud := false
+			for _, aud := range audiences {
+				if aud == config.RequiredAudience {
+					validAud = true
+					break
+				}
+			}
+			if !validAud {
+				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		if config.NamespaceIsolation {
+			if claims, ok := token.Claims.(jwt.MapClaims); ok {
+				if kubeRaw, ok := claims["kubernetes.io"]; ok {
+					if kube, ok := kubeRaw.(map[string]interface{}); ok {
+						if ns, ok := kube["namespace"].(string); ok {
+							if teamID == "" {
+								teamID = ns
+							} else if teamID != ns {
+								log.Printf("GET %s Warning: URL teamId %s does not match token namespace %s", hash, teamID, ns)
+								http.Error(w, "Forbidden: teamId mismatch", http.StatusForbidden)
+								return
 							}
 						}
 					}
@@ -491,7 +559,6 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 			}
 		}
 	}
-
 	if teamID == "" {
 		teamID = "default"
 	}
