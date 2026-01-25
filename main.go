@@ -200,9 +200,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	h := atomic.LoadUint64(&hits)
 	m := atomic.LoadUint64(&misses)
-	hitRate := 0.0
+	hitRatio := 0.0
 	if h+m > 0 {
-		hitRate = float64(h) / float64(h+m)
+		hitRatio = float64(h) / float64(h+m)
 	}
 
 	stats := map[string]interface{}{
@@ -212,7 +212,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		"security":      !config.NoSecurity,
 		"hits":          h,
 		"misses":        m,
-		"hit_rate":      hitRate,
+		"hit_ratio":     hitRatio,
 		"put_success":   atomic.LoadUint64(&putSuccess),
 		"put_errors":    atomic.LoadUint64(&putErrors),
 		"cached_files":  fileCount,
@@ -231,9 +231,9 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	ps := atomic.LoadUint64(&putSuccess)
 	pe := atomic.LoadUint64(&putErrors)
 
-	hitRate := 0.0
+	hitRatio := 0.0
 	if h+m > 0 {
-		hitRate = float64(h) / float64(h+m)
+		hitRatio = float64(h) / float64(h+m)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
@@ -263,7 +263,7 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "# HELP goturbo_cache_hit_ratio Cache hit ratio\n")
 	fmt.Fprintf(w, "# TYPE goturbo_cache_hit_ratio gauge\n")
-	fmt.Fprintf(w, "goturbo_cache_hit_ratio %f\n", hitRate)
+	fmt.Fprintf(w, "goturbo_cache_hit_ratio %f\n", hitRatio)
 }
 
 func getDiskUsage() (uint64, uint64) {
@@ -526,12 +526,13 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		return
 	}
 	defer f.Close()
-
+	start := time.Now()
 	w.Header().Set("X-Goturbo-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, f)
+	n, _ := io.Copy(w, f)
+	duration := time.Since(start)
 	atomic.AddUint64(&hits, 1)
-	log.Printf("GET %s [%s] - Hit", hash, teamID)
+	log.Printf("GET %s [%s] - %d bytes in %v", hash, teamID, n, duration)
 }
 
 func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
@@ -643,9 +644,10 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
+	start := time.Now()
 	written, err := io.Copy(f, r.Body)
 	f.Close()
+	duration := time.Since(start)
 	if err != nil {
 		atomic.AddUint64(&putErrors, 1)
 		os.Remove(tmpPath)
@@ -666,6 +668,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 
 	delta := int64(written) - oldSize
+
 	if delta > 0 {
 		atomic.AddUint64(&totalBytes, uint64(delta))
 	} else if delta < 0 {
@@ -674,7 +677,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 	w.WriteHeader(http.StatusOK)
 	atomic.AddUint64(&putSuccess, 1)
-	log.Printf("PUT %s [%s] - Success", hash, teamID)
+	log.Printf("PUT %s [%s] - %d bytes in %v", hash, teamID, written, duration)
 }
 
 func handleEvents(w http.ResponseWriter, r *http.Request) {
