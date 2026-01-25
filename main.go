@@ -424,22 +424,9 @@ func parseRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 	}
 
 	n := new(big.Int).SetBytes(nBytes)
+	eInt := new(big.Int).SetBytes(eBytes)
 
-	var e int
-	if len(eBytes) < 8 {
-		// padding for binary.Read
-		pad := make([]byte, 8-len(eBytes))
-		eBytes = append(pad, eBytes...)
-		// Since we padded front (BigEndian), checking logic...
-		// Actually, binary.BigEndian.Uint64 expects 8 bytes.
-		// Exponent is usually small (65537), so this manual shift is safer:
-		eInt := new(big.Int).SetBytes(eBytes)
-		e = int(eInt.Int64())
-	} else {
-		return nil, fmt.Errorf("exponent too large")
-	}
-
-	return &rsa.PublicKey{N: n, E: e}, nil
+	return &rsa.PublicKey{N: n, E: int(eInt.Int64())}, nil
 }
 
 // --- Handlers ---
@@ -632,8 +619,10 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	// Save artifact
 	path := filepath.Join(teamPath, hash)
 	var oldSize int64
+	exists := false
 	if info, err := os.Stat(path); err == nil {
 		oldSize = info.Size()
+		exists = true
 	}
 
 	// Create temp file first
@@ -663,7 +652,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 
 	// Update counters
-	if oldSize == 0 {
+	if !exists {
 		atomic.AddUint64(&totalFiles, 1)
 	}
 
