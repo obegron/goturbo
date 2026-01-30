@@ -339,21 +339,24 @@ type JWKS struct {
 }
 
 type JWKSManager struct {
-	trustedIssuers map[string]string      // issuer -> discoveryURL
+	trustedIssuers map[string][]string    // issuer -> []discoveryURL
 	keys           map[string]interface{} // Map "issuer|kid" -> PublicKey
 	mu             sync.RWMutex
 }
 
 func NewJWKSManager(issuers []string) *JWKSManager {
-	issuerMap := make(map[string]string)
+	issuerMap := make(map[string][]string)
 	for _, iss := range issuers {
 		parts := strings.SplitN(iss, "=", 2)
+		var issuer, discoveryURL string
 		if len(parts) == 2 {
-			issuerMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			issuer = strings.TrimSpace(parts[0])
+			discoveryURL = strings.TrimSpace(parts[1])
 		} else {
-			trimmed := strings.TrimSpace(iss)
-			issuerMap[trimmed] = trimmed
+			issuer = strings.TrimSpace(iss)
+			discoveryURL = issuer
 		}
+		issuerMap[issuer] = append(issuerMap[issuer], discoveryURL)
 	}
 	return &JWKSManager{
 		trustedIssuers: issuerMap,
@@ -412,44 +415,72 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 		}
 	}
 
-	discoveryURL, ok := m.trustedIssuers[issuer]
-	if !ok {
+	discoveryURLs, ok := m.trustedIssuers[issuer]
+	if !ok || len(discoveryURLs) == 0 {
 		return fmt.Errorf("unknown issuer: %s", issuer)
 	}
 
-	// 1. OIDC Discovery
-	wellKnownURL := strings.TrimSuffix(discoveryURL, "/") + "/.well-known/openid-configuration"
-	resp, err := client.Get(wellKnownURL)
-	if err != nil {
-		return fmt.Errorf("failed to fetch discovery config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("discovery endpoint returned %d", resp.StatusCode)
-	}
-
-	var config struct {
-		JwksURI string `json:"jwks_uri"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
-		return fmt.Errorf("failed to decode discovery config: %w", err)
-	}
-
-	// 2. Fetch JWKS
-	jwksResp, err := client.Get(config.JwksURI)
-	if err != nil {
-		return fmt.Errorf("failed to fetch JWKS: %w", err)
-	}
-	defer jwksResp.Body.Close()
-
-	if jwksResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("jwks endpoint returned %d", jwksResp.StatusCode)
-	}
-
+	var lastErr error
 	var jwks JWKS
-	if err := json.NewDecoder(jwksResp.Body).Decode(&jwks); err != nil {
-		return fmt.Errorf("failed to decode JWKS: %w", err)
+	found := false
+
+	for _, discoveryURL := range discoveryURLs {
+		// 1. OIDC Discovery
+		wellKnownURL := strings.TrimSuffix(discoveryURL, "/") + "/.well-known/openid-configuration"
+		resp, err := client.Get(wellKnownURL)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to fetch discovery config from %s: %w", discoveryURL, err)
+			log.Printf("Warning: %v", lastErr)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("discovery endpoint %s returned %d", discoveryURL, resp.StatusCode)
+			log.Printf("Warning: %v", lastErr)
+			continue
+		}
+
+		var discoveryConfig struct {
+			JwksURI string `json:"jwks_uri"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&discoveryConfig); err != nil {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("failed to decode discovery config from %s: %w", discoveryURL, err)
+			log.Printf("Warning: %v", lastErr)
+			continue
+		}
+		resp.Body.Close()
+
+		// 2. Fetch JWKS
+		jwksResp, err := client.Get(discoveryConfig.JwksURI)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to fetch JWKS from %s: %w", discoveryConfig.JwksURI, err)
+			log.Printf("Warning: %v", lastErr)
+			continue
+		}
+
+		if jwksResp.StatusCode != http.StatusOK {
+			jwksResp.Body.Close()
+			lastErr = fmt.Errorf("jwks endpoint %s returned %d", discoveryConfig.JwksURI, jwksResp.StatusCode)
+			log.Printf("Warning: %v", lastErr)
+			continue
+		}
+
+		if err := json.NewDecoder(jwksResp.Body).Decode(&jwks); err != nil {
+			jwksResp.Body.Close()
+			lastErr = fmt.Errorf("failed to decode JWKS from %s: %w", discoveryConfig.JwksURI, err)
+			log.Printf("Warning: %v", lastErr)
+			continue
+		}
+		jwksResp.Body.Close()
+
+		found = true
+		break // Success, stop trying other URLs
+	}
+
+	if !found {
+		return fmt.Errorf("failed to refresh keys for issuer %s: %w", issuer, lastErr)
 	}
 
 	// 3. Parse and Store Keys
