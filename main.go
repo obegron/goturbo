@@ -29,7 +29,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.4.1"
+const Version = "0.4.2"
 
 // Config holds configuration
 type Config struct {
@@ -66,7 +66,7 @@ func main() {
 	// Parse flags
 	flag.StringVar(&config.Port, "port", lookupEnvOr("PORT", "8080"), "HTTP server port")
 	flag.StringVar(&config.CacheDir, "cache-dir", lookupEnvOr("CACHE_DIR", "/tmp/turbo-cache"), "Directory for cache storage")
-	flag.StringVar(&config.TrustedIssuers, "trusted-issuers", lookupEnvOr("TRUSTED_ISSUERS", ""), "Comma-separated list of trusted issuer URLs")
+	flag.StringVar(&config.TrustedIssuers, "trusted-issuers", lookupEnvOr("TRUSTED_ISSUERS", ""), "Comma-separated list of trusted issuer URLs (can be issuer=url)")
 	flag.StringVar(&config.RequiredAudience, "required-audience", lookupEnvOr("REQUIRED_AUDIENCE", ""), "Required Audience (aud) claim in JWT")
 	flag.StringVar(&config.PublicKeyPath, "public-key-path", lookupEnvOr("PUBLIC_KEY_PATH", ""), "Path to static RSA public key (PEM)")
 	flag.BoolVar(&config.NoSecurity, "no-security", lookupEnvBool("NO_SECURITY", false), "Disable authentication checks")
@@ -339,14 +339,24 @@ type JWKS struct {
 }
 
 type JWKSManager struct {
-	trustedIssuers []string
+	trustedIssuers map[string]string      // issuer -> discoveryURL
 	keys           map[string]interface{} // Map "issuer|kid" -> PublicKey
 	mu             sync.RWMutex
 }
 
 func NewJWKSManager(issuers []string) *JWKSManager {
+	issuerMap := make(map[string]string)
+	for _, iss := range issuers {
+		parts := strings.SplitN(iss, "=", 2)
+		if len(parts) == 2 {
+			issuerMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		} else {
+			trimmed := strings.TrimSpace(iss)
+			issuerMap[trimmed] = trimmed
+		}
+	}
 	return &JWKSManager{
-		trustedIssuers: issuers,
+		trustedIssuers: issuerMap,
 		keys:           make(map[string]interface{}),
 	}
 }
@@ -358,14 +368,7 @@ func (m *JWKSManager) GetKey(token *jwt.Token) (interface{}, error) {
 	}
 
 	// Verify issuer is trusted
-	isTrusted := false
-	for _, trusted := range m.trustedIssuers {
-		if trusted == iss {
-			isTrusted = true
-			break
-		}
-	}
-	if !isTrusted {
+	if _, trusted := m.trustedIssuers[iss]; !trusted {
 		return nil, fmt.Errorf("untrusted issuer: %s", iss)
 	}
 
@@ -409,8 +412,13 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 		}
 	}
 
+	discoveryURL, ok := m.trustedIssuers[issuer]
+	if !ok {
+		return fmt.Errorf("unknown issuer: %s", issuer)
+	}
+
 	// 1. OIDC Discovery
-	wellKnownURL := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
+	wellKnownURL := strings.TrimSuffix(discoveryURL, "/") + "/.well-known/openid-configuration"
 	resp, err := client.Get(wellKnownURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch discovery config: %w", err)
