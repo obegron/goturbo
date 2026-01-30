@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -27,7 +29,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const Version = "0.4.0"
+const Version = "0.4.1"
 
 // Config holds configuration
 type Config struct {
@@ -49,7 +51,7 @@ type Config struct {
 var (
 	config     Config
 	keyManager *JWKSManager
-	staticKey  *rsa.PublicKey
+	staticKey  interface{}
 
 	// Metrics
 	hits       uint64
@@ -125,10 +127,13 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to parse public key: %v", err)
 			}
-			var ok bool
-			staticKey, ok = pub.(*rsa.PublicKey)
-			if !ok {
-				log.Fatal("Public key is not RSA")
+			switch pub := pub.(type) {
+			case *rsa.PublicKey:
+				staticKey = pub
+			case *ecdsa.PublicKey:
+				staticKey = pub
+			default:
+				log.Fatal("Public key is not RSA or ECDSA")
 			}
 			log.Printf("Using static public key from %s", config.PublicKeyPath)
 		} else if config.TrustedIssuers != "" {
@@ -322,8 +327,11 @@ var startTime = time.Now()
 type JWK struct {
 	Kid string `json:"kid"`
 	Kty string `json:"kty"`
-	N   string `json:"n"`
-	E   string `json:"e"`
+	N   string `json:"n,omitempty"`
+	E   string `json:"e,omitempty"`
+	Crv string `json:"crv,omitempty"`
+	X   string `json:"x,omitempty"`
+	Y   string `json:"y,omitempty"`
 }
 
 type JWKS struct {
@@ -332,14 +340,14 @@ type JWKS struct {
 
 type JWKSManager struct {
 	trustedIssuers []string
-	keys           map[string]*rsa.PublicKey // Map "issuer|kid" -> PublicKey
+	keys           map[string]interface{} // Map "issuer|kid" -> PublicKey
 	mu             sync.RWMutex
 }
 
 func NewJWKSManager(issuers []string) *JWKSManager {
 	return &JWKSManager{
 		trustedIssuers: issuers,
-		keys:           make(map[string]*rsa.PublicKey),
+		keys:           make(map[string]interface{}),
 	}
 }
 
@@ -441,11 +449,17 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 	defer m.mu.Unlock()
 
 	for _, jwk := range jwks.Keys {
-		if jwk.Kty != "RSA" {
+		var pubKey interface{}
+		var err error
+
+		if jwk.Kty == "RSA" {
+			pubKey, err = parseRSAPublicKey(jwk.N, jwk.E)
+		} else if jwk.Kty == "EC" {
+			pubKey, err = parseECPublicKey(jwk.Crv, jwk.X, jwk.Y)
+		} else {
 			continue
 		}
 
-		pubKey, err := parseRSAPublicKey(jwk.N, jwk.E)
 		if err != nil {
 			log.Printf("Failed to parse JWK %s: %v", jwk.Kid, err)
 			continue
@@ -472,6 +486,34 @@ func parseRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 	eInt := new(big.Int).SetBytes(eBytes)
 
 	return &rsa.PublicKey{N: n, E: int(eInt.Int64())}, nil
+}
+
+func parseECPublicKey(crv, xStr, yStr string) (*ecdsa.PublicKey, error) {
+	var curve elliptic.Curve
+	switch crv {
+	case "P-256":
+		curve = elliptic.P256()
+	case "P-384":
+		curve = elliptic.P384()
+	case "P-521":
+		curve = elliptic.P521()
+	default:
+		return nil, fmt.Errorf("unsupported curve: %s", crv)
+	}
+
+	xBytes, err := base64.RawURLEncoding.DecodeString(xStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid x coordinate: %v", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(yStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid y coordinate: %v", err)
+	}
+
+	x := new(big.Int).SetBytes(xBytes)
+	y := new(big.Int).SetBytes(yBytes)
+
+	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 }
 
 func hasAccess(token *jwt.Token, namespace string, operation string, hash string) bool {
@@ -603,14 +645,15 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
 			}
 			if staticKey != nil {
 				return staticKey, nil
 			}
 			return keyManager.GetKey(token)
 		})
-
 		if err != nil || !token.Valid {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			log.Printf("Auth failed for GET %s [%s]: %v", hash, teamID, err)
@@ -693,7 +736,9 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
 			}
 			if staticKey != nil {
 				return staticKey, nil
