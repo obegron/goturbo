@@ -3,11 +3,11 @@ IMAGE_NAME := obegron/goturbo
 
 .PHONY: build
 build:
-	CGO_ENABLED=0 go build -ldflags="-s -w" -o goturbo main.go
+	CGO_ENABLED=0 go build -ldflags="-s -w" -o goturbo .
 
 .PHONY: run
 run:
-	go run main.go
+	go run .
 
 .PHONY: docker-build
 docker-build:

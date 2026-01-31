@@ -9,11 +9,11 @@ RUN echo "turbo:x:10001:10001:turboUser:/:" > /etc/passwd_scratch
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY main.go .
+COPY *.go ./
 
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o goturbo main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o goturbo .
 
 RUN mkdir -p /tmp/turbo-cache
 
