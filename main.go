@@ -11,7 +11,7 @@ import (
 	time "time"
 )
 
-const Version = "0.4.3"
+const Version = "0.5.0"
 
 func main() {
 	// Initialize configuration
@@ -31,6 +31,7 @@ func main() {
 	mux.HandleFunc("/", handleStatus)
 	mux.HandleFunc("/metrics", handleMetrics)
 	mux.HandleFunc("/v8/artifacts/", handleArtifacts) // Handles GET and PUT
+	mux.HandleFunc("/v8/bulk", handleBulk)
 	mux.HandleFunc("/v8/artifacts/events", handleEvents)
 	mux.HandleFunc("/health", handleHealth)
 

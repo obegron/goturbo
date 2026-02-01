@@ -266,14 +266,35 @@ func hasAccess(token *jwt.Token, namespace string, operation string, hash string
 	// 2. Check AD roles / Groups
 	roles := extractRoles(claims, config.RoleClaimPath)
 
-	// Check for admin roles
-	if config.AdminRoles != "" {
-		adminRoles := strings.Split(config.AdminRoles, ",")
+	// Include K8s namespace as a potential admin role
+	if saNS := extractServiceAccountNamespace(claims); saNS != "" {
+		roles = append(roles, saNS)
+	}
+
+	// Check for admin roles (Global or ID-based)
+	// Check Global (*)
+	if globalAdmins, ok := config.IDAdminRoles["*"]; ok {
 		for _, role := range roles {
-			role = strings.TrimSpace(role)
-			for _, admin := range adminRoles {
-				if role == strings.TrimSpace(admin) {
+			for _, admin := range globalAdmins {
+				if role == admin {
 					return true
+				}
+			}
+		}
+	}
+
+	// Check ID-scoped Admins
+	if iss, err := token.Claims.GetIssuer(); err == nil {
+		for id, issuerURL := range config.IssuerIDMap {
+			if issuerURL == iss {
+				if admins, ok := config.IDAdminRoles[id]; ok {
+					for _, role := range roles {
+						for _, admin := range admins {
+							if role == admin {
+								return true
+							}
+						}
+					}
 				}
 			}
 		}
@@ -292,6 +313,55 @@ func hasAccess(token *jwt.Token, namespace string, operation string, hash string
 
 	log.Printf("%s %s [%s] - Forbidden: no matching role (required: %s, has: %v)",
 		operation, hash, namespace, requiredRole, roles)
+	return false
+}
+
+func hasAdminAccess(token *jwt.Token, namespace string) bool {
+	// Global Admins (Check across all ID mappings)
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return false
+	}
+	roles := extractRoles(claims, config.RoleClaimPath)
+
+	// Include K8s namespace as a "role" for admin checks
+	if saNS := extractServiceAccountNamespace(claims); saNS != "" {
+		roles = append(roles, saNS)
+	}
+
+	// 1. Check Legacy Global Admins (*)
+	if globalAdmins, ok := config.IDAdminRoles["*"]; ok {
+		for _, role := range roles {
+			for _, admin := range globalAdmins {
+				if role == admin {
+					return true
+				}
+			}
+		}
+	}
+
+	// 2. Check ID-scoped Admins
+	// We need to find if the token's issuer maps to any known ID
+	iss, err := token.Claims.GetIssuer()
+	if err != nil {
+		return false
+	}
+
+	for id, issuerURL := range config.IssuerIDMap {
+		if issuerURL == iss {
+			// Found the ID for this issuer. Check if user has admin role for this ID.
+			if admins, ok := config.IDAdminRoles[id]; ok {
+				for _, role := range roles {
+					for _, admin := range admins {
+						if role == admin {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return false
 }
 

@@ -24,6 +24,12 @@ func handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := parts[3]
 
+	// Validate hash to prevent path injection
+	if hash == "" || hash == "." || hash == ".." || strings.Contains(hash, "/") || strings.Contains(hash, "\\") {
+		http.Error(w, "Invalid artifact hash", http.StatusBadRequest)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		getArtifact(w, r, hash)
@@ -43,6 +49,12 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		teamID = "default"
 	}
 	teamID = filepath.Base(teamID)
+	
+	// Sanitize teamID (CodeQL)
+	if teamID == "." || teamID == ".." || strings.ContainsAny(teamID, `/\`) {
+		http.Error(w, "Invalid team ID", http.StatusBadRequest)
+		return
+	}
 
 	// Authentication for Read (if enabled)
 	if !config.NoSecurity && !config.NoSecurityRead {
@@ -133,6 +145,13 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		teamID = "default"
 	}
 	teamID = filepath.Base(teamID)
+
+	// Sanitize teamID (CodeQL)
+	if teamID == "." || teamID == ".." || strings.ContainsAny(teamID, `/\`) {
+		atomic.AddUint64(&putErrors, 1)
+		http.Error(w, "Invalid team ID", http.StatusBadRequest)
+		return
+	}
 
 	// Authentication
 	if !config.NoSecurity {

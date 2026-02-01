@@ -67,6 +67,7 @@ func TestHasAccess(t *testing.T) {
 	config.RoleClaimPath = "groups"
 	config.RolePattern = "role-{namespace}"
 	config.AdminRoles = "global-admin"
+	config.IDAdminRoles = map[string][]string{"*": {"global-admin"}}
 
 	t.Run("Service account access", func(t *testing.T) {
 		token := &jwt.Token{
@@ -117,6 +118,74 @@ func TestHasAccess(t *testing.T) {
 		}
 		if hasAccess(token, "test-ns", "GET", "hash") {
 			t.Error("expected no access")
+		}
+	})
+}
+
+func TestHasAdminAccess(t *testing.T) {
+	// Setup
+	config.RoleClaimPath = "groups"
+	config.IssuerIDMap = map[string]string{
+		"prod": "https://oidc.prod.com",
+	}
+	config.IDAdminRoles = map[string][]string{
+		"prod": {"admin-ci-ns"},
+		"*":    {"global-admin"},
+	}
+
+	t.Run("K8s Namespace as Admin Role", func(t *testing.T) {
+		token := &jwt.Token{
+			Claims: jwt.MapClaims{
+				"iss": "https://oidc.prod.com",
+				"kubernetes.io": map[string]interface{}{
+					"namespace": "admin-ci-ns",
+				},
+			},
+		}
+
+		// Should have admin access to ANY namespace (e.g. "target-ns") because it's an admin for "prod" ID
+		if !hasAdminAccess(token, "target-ns") {
+			t.Error("expected admin access via K8s namespace")
+		}
+	})
+
+	t.Run("Global Admin Role", func(t *testing.T) {
+		token := &jwt.Token{
+			Claims: jwt.MapClaims{
+				"iss": "https://any.com",
+				"groups": []interface{}{"global-admin"},
+			},
+		}
+		if !hasAdminAccess(token, "target-ns") {
+			t.Error("expected admin access via global role")
+		}
+	})
+
+	t.Run("Wrong Namespace", func(t *testing.T) {
+		token := &jwt.Token{
+			Claims: jwt.MapClaims{
+				"iss": "https://oidc.prod.com",
+				"kubernetes.io": map[string]interface{}{
+					"namespace": "other-ns",
+				},
+			},
+		}
+		if hasAdminAccess(token, "target-ns") {
+			t.Error("expected NO admin access")
+		}
+	})
+	
+	t.Run("Wrong Issuer", func(t *testing.T) {
+		token := &jwt.Token{
+			Claims: jwt.MapClaims{
+				"iss": "https://oidc.dev.com", // Unknown issuer / different ID
+				"kubernetes.io": map[string]interface{}{
+					"namespace": "admin-ci-ns",
+				},
+			},
+		}
+		if hasAdminAccess(token, "target-ns") {
+			t.Error("expected NO admin access due to wrong issuer")
 		}
 	})
 }
