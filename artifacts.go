@@ -48,10 +48,13 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if teamID == "" {
 		teamID = "default"
 	}
-	teamID = filepath.Base(teamID)
-	
-	// Sanitize teamID (CodeQL)
-	if teamID == "." || teamID == ".." || strings.ContainsAny(teamID, `/\`) {
+
+	// Validate teamID to ensure it is a single safe path component
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" ||
+		strings.Contains(teamID, "/") ||
+		strings.Contains(teamID, "\\") ||
+		strings.Contains(teamID, "..") {
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
@@ -144,10 +147,13 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if teamID == "" {
 		teamID = "default"
 	}
-	teamID = filepath.Base(teamID)
 
-	// Sanitize teamID (CodeQL)
-	if teamID == "." || teamID == ".." || strings.ContainsAny(teamID, `/\`) {
+	// Validate teamID to ensure it is a single safe path component
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" ||
+		strings.Contains(teamID, "/") ||
+		strings.Contains(teamID, "\\") ||
+		strings.Contains(teamID, "..") {
 		atomic.AddUint64(&putErrors, 1)
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return

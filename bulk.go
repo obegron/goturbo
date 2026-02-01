@@ -29,9 +29,12 @@ func handleBulk(w http.ResponseWriter, r *http.Request) {
 	if namespace == "" {
 		namespace = "default"
 	}
-	// Clean namespace to ensure it's safe (basename check)
-	namespace = filepath.Base(namespace)
-	if namespace == "." || namespace == ".." || strings.ContainsAny(namespace, `/\`) {
+	// Validate namespace to ensure it is a single safe path component
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" ||
+		strings.Contains(namespace, "/") ||
+		strings.Contains(namespace, "\\") ||
+		strings.Contains(namespace, "..") {
 		http.Error(w, "Invalid namespace", http.StatusBadRequest)
 		return
 	}
