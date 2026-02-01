@@ -25,7 +25,9 @@ func handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	hash := parts[3]
 
 	// Validate hash to prevent path injection
-	if hash == "" || hash == "." || hash == ".." || strings.Contains(hash, "/") || strings.Contains(hash, "\\") {
+	var ok bool
+	hash, ok = sanitizePathComponent(hash)
+	if !ok {
 		http.Error(w, "Invalid artifact hash", http.StatusBadRequest)
 		return
 	}
@@ -50,11 +52,8 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 
 	// Validate teamID to ensure it is a single safe path component
-	teamID = strings.TrimSpace(teamID)
-	if teamID == "" ||
-		strings.Contains(teamID, "/") ||
-		strings.Contains(teamID, "\\") ||
-		strings.Contains(teamID, "..") {
+	teamID, ok := sanitizePathComponent(teamID)
+	if !ok {
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
@@ -149,11 +148,8 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 
 	// Validate teamID to ensure it is a single safe path component
-	teamID = strings.TrimSpace(teamID)
-	if teamID == "" ||
-		strings.Contains(teamID, "/") ||
-		strings.Contains(teamID, "\\") ||
-		strings.Contains(teamID, "..") {
+	teamID, ok := sanitizePathComponent(teamID)
+	if !ok {
 		atomic.AddUint64(&putErrors, 1)
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return

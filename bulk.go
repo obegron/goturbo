@@ -30,11 +30,9 @@ func handleBulk(w http.ResponseWriter, r *http.Request) {
 		namespace = "default"
 	}
 	// Validate namespace to ensure it is a single safe path component
-	namespace = strings.TrimSpace(namespace)
-	if namespace == "" ||
-		strings.Contains(namespace, "/") ||
-		strings.Contains(namespace, "\\") ||
-		strings.Contains(namespace, "..") {
+	var ok bool
+	namespace, ok = sanitizePathComponent(namespace)
+	if !ok {
 		http.Error(w, "Invalid namespace", http.StatusBadRequest)
 		return
 	}
