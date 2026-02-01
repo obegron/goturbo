@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 )
 
@@ -15,6 +18,27 @@ var (
 	totalFiles uint64
 	totalBytes uint64
 )
+
+func InitCacheMetrics() {
+	log.Printf("Initializing cache metrics from %s...", config.CacheDir)
+	var count uint64
+	var size uint64
+	filepath.WalkDir(config.CacheDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		count++
+		size += uint64(info.Size())
+		return nil
+	})
+	atomic.StoreUint64(&totalFiles, count)
+	atomic.StoreUint64(&totalBytes, size)
+	log.Printf("Cache initialized: %d files, %d bytes", count, size)
+}
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {

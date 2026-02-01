@@ -2,113 +2,26 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/rsa"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
-	"sync/atomic"
-	"syscall"
-	"time"
+	syscall "syscall"
+	time "time"
 )
 
 const Version = "0.4.3"
-
-var (
-	keyManager *JWKSManager
-	staticKey  interface{}
-)
 
 func main() {
 	// Initialize configuration
 	InitConfig()
 
-	if config.NoSecurity {
-		log.Printf("⚠️  Security DISABLED - both read and write are open")
-	} else if config.NoSecurityRead {
-		log.Printf("🔓 Read security DISABLED - writes require authentication")
-	} else {
-		log.Printf("🔒 Security ENABLED - all operations require authentication")
-	}
+	// Setup environment (logs, directories, keys)
+	Configure()
 
-	if config.InsecureSkipVerify {
-		log.Println("⚠️ TLS verification for OIDC discovery DISABLED")
-	}
-
-	// Ensure cache directory exists
-	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {
-		log.Fatalf("Failed to create cache directory: %v", err)
-	}
-
-	// Initialize counters by walking the disk once
-	log.Printf("Initializing cache metrics from %s...", config.CacheDir)
-	var count uint64
-	var size uint64
-	filepath.WalkDir(config.CacheDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		count++
-		size += uint64(info.Size())
-		return nil
-	})
-	atomic.StoreUint64(&totalFiles, count)
-	atomic.StoreUint64(&totalBytes, size)
-	log.Printf("Cache initialized: %d files, %d bytes", count, size)
-
-	// Initialize Key Manager or static key
-	if !config.NoSecurity {
-		if config.PublicKeyPath != "" {
-			keyData, err := os.ReadFile(config.PublicKeyPath)
-			if err != nil {
-				log.Fatalf("Failed to read public key: %v", err)
-			}
-			block, _ := pem.Decode(keyData)
-			if block == nil {
-				log.Fatal("Failed to decode PEM block")
-			}
-			pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-			if err != nil {
-				log.Fatalf("Failed to parse public key: %v", err)
-			}
-			switch pub := pub.(type) {
-			case *rsa.PublicKey:
-				staticKey = pub
-			case *ecdsa.PublicKey:
-				staticKey = pub
-			default:
-				log.Fatal("Public key is not RSA or ECDSA")
-			}
-			log.Printf("Using static public key from %s", config.PublicKeyPath)
-		} else if config.TrustedIssuers != "" {
-			issuers := strings.Split(config.TrustedIssuers, ",")
-			var cleanedIssuers []string
-			for _, iss := range issuers {
-				if trimmed := strings.TrimSpace(iss); trimmed != "" {
-					cleanedIssuers = append(cleanedIssuers, trimmed)
-				}
-			}
-			keyManager = NewJWKSManager(cleanedIssuers)
-		} else {
-			log.Fatal("Security is enabled but no trusted issuers or public key provided. Use --trusted-issuers, --public-key-path, or --no-security.")
-		}
-
-		if config.RequiredAudience != "" {
-			log.Printf("Enforcing audience: %s", config.RequiredAudience)
-		}
-	} else {
-		log.Println("Warning: Security disabled. Authentication will be bypassed.")
-	}
+	// Initialize metrics (cache walk)
+	InitCacheMetrics()
 
 	// Start background cleanup
 	go cleanupLoop()
