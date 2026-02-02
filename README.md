@@ -53,12 +53,12 @@ turbo build
 
 `goturbo` supports verifying JWT tokens from OIDC providers (like Kubernetes).
 
-| Flag                    | Env Variable           | Description                                                                                                         |
-| ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `-trusted-issuers`      | `TRUSTED_ISSUERS`      | List of trusted OIDC issuer URLs (separated by `;` or `,`). Supports mapping IDs and discovery URLs: `id=issuer=discovery_url` or `issuer=discovery_url`. The `id` is used for admin role scoping. |
-| `-required-audience`    | `REQUIRED_AUDIENCE`    | Required `aud` claim in the JWT.                                                                                    |
-| `-public-key-path`      | `PUBLIC_KEY_PATH`      | Path to a static RSA public key (PEM) for verifying tokens manually.                                                |
-| `-insecure-skip-verify` | `INSECURE_SKIP_VERIFY` | Skip TLS verification for OIDC discovery (useful for self-signed internal certs).                                   |
+| Flag                    | Env Variable           | Description                                                                                                                                                                                 |
+| ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-trusted-issuers`      | `TRUSTED_ISSUERS`      | List of trusted OIDC issuer URLs (separated by `;`). Supports mapping IDs and discovery URLs: `id=issuer=discovery_url` or `issuer=discovery_url`. The `id` is used for admin role scoping. |
+| `-required-audience`    | `REQUIRED_AUDIENCE`    | Required `aud` claim in the JWT.                                                                                                                                                            |
+| `-public-key-path`      | `PUBLIC_KEY_PATH`      | Path to a static RSA public key (PEM) for verifying tokens manually.                                                                                                                        |
+| `-insecure-skip-verify` | `INSECURE_SKIP_VERIFY` | Skip TLS verification for OIDC discovery (useful for self-signed internal certs).                                                                                                           |
 
 **Example: Multi-Cluster with Admin Scoping**
 Define IDs for issuers to scope admin privileges. You can use a Kubernetes namespace as an admin role (e.g., `prod:admin-ci-ns`):
@@ -83,9 +83,11 @@ Admin users can download a tarball of artifacts matching a prefix.
 **Endpoint:** `GET /v8/bulk?prefix=<prefix>&namespace=<namespace>`
 
 **Headers:**
+
 - `Authorization: Bearer <token>`
 
 **Requirements:**
+
 - The token must have an admin role configured in `ADMIN_ROLES`.
 - If the admin role is scoped (e.g., `prod:admin`), the token's issuer must match the ID (`prod`) defined in `TRUSTED_ISSUERS`.
 
@@ -93,11 +95,11 @@ Admin users can download a tarball of artifacts matching a prefix.
 
 If running in a multi-tenant environment (like Kubernetes), you can enforce strict isolation based on JWT claims.
 
-| Flag                   | Env Variable          | Description                                                                                                               |
-| ---------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `-namespace-isolation` | `NAMESPACE_ISOLATION` | Use the Kubernetes namespace (from the token) as the `TURBO_TEAM` ID.                                                     |
-| `-role-pattern`        | `ROLE_PATTERN`        | Pattern to validate roles against the namespace. Use `{namespace}` as a placeholder. Example: `sec-role-{namespace}-dev`. |
-| `-role-claim-path`     | `ROLE_CLAIM_PATH`     | JSON path to the roles/groups claim in the JWT. Default: `groups`.                                                        |
+| Flag                   | Env Variable          | Description                                                                                                                                                                            |
+| ---------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-namespace-isolation` | `NAMESPACE_ISOLATION` | Use the Kubernetes namespace (from the token) as the `TURBO_TEAM` ID.                                                                                                                  |
+| `-role-pattern`        | `ROLE_PATTERN`        | Pattern to validate roles against the namespace. Use `{namespace}` as a placeholder. Example: `sec-role-{namespace}-dev`.                                                              |
+| `-role-claim-path`     | `ROLE_CLAIM_PATH`     | JSON path to the roles/groups claim in the JWT. Default: `groups`.                                                                                                                     |
 | `-admin-roles`         | `ADMIN_ROLES`         | List of roles that have admin access (separated by `;` or `,`). Supports scoping to specific Issuer IDs: `id:role` (e.g., `prod:admin-group` or `prod:k8s-namespace`) or global roles. |
 
 ---
