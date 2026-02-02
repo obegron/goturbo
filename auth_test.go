@@ -168,7 +168,7 @@ func TestHasAdminAccess(t *testing.T) {
 	t.Run("Global Admin Role", func(t *testing.T) {
 		token := &jwt.Token{
 			Claims: jwt.MapClaims{
-				"iss": "https://any.com",
+				"iss":    "https://any.com",
 				"groups": []interface{}{"global-admin"},
 			},
 		}
@@ -190,7 +190,7 @@ func TestHasAdminAccess(t *testing.T) {
 			t.Error("expected NO admin access")
 		}
 	})
-	
+
 	t.Run("Wrong Issuer", func(t *testing.T) {
 		token := &jwt.Token{
 			Claims: jwt.MapClaims{

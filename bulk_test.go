@@ -80,7 +80,7 @@ func TestHandleBulk(t *testing.T) {
 	// 3. Test Success (Admin)
 	// We need to map issuer to ID first for the new logic
 	config.IssuerIDMap = map[string]string{"default": "test-issuer"}
-	
+
 	req = httptest.NewRequest("GET", "/v8/bulk?prefix=maven-", nil)
 	req.Header.Set("Authorization", "Bearer "+createToken("admin-role"))
 	w = httptest.NewRecorder()

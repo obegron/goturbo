@@ -129,78 +129,78 @@ func Configure() {
 				log.Fatal("Public key is not RSA or ECDSA")
 			}
 			log.Printf("Using static public key from %s", config.PublicKeyPath)
-				} else if config.TrustedIssuers != "" {
-					var err error
-					var cleanedIssuers []string
-					config.IssuerIDMap, cleanedIssuers, err = parseTrustedIssuers(config.TrustedIssuers)
-					if err != nil {
-						log.Fatalf("Invalid TRUSTED_ISSUERS config: %v", err)
-					}
-					keyManager = NewJWKSManager(cleanedIssuers)
-				} else {
-					log.Fatal("Security is enabled but no trusted issuers or public key provided. Use --trusted-issuers, --public-key-path, or --no-security.")
-				}
-		
-				if config.RequiredAudience != "" {
-					log.Printf("Enforcing audience: %s", config.RequiredAudience)
-				}
-			} else {
-				log.Println("Warning: Security disabled. Authentication will be bypassed.")
-			}
-		}
-		
-		func parseTrustedIssuers(input string) (map[string]string, []string, error) {
-			idMap := make(map[string]string)
+		} else if config.TrustedIssuers != "" {
+			var err error
 			var cleanedIssuers []string
-		
-			// Split by semicolon
-			rawIssuers := strings.Split(input, ";")
-			isMulti := len(rawIssuers) > 1
-		
-			for _, entry := range rawIssuers {
-				entry = strings.TrimSpace(entry)
-				if entry == "" {
-					continue
+			config.IssuerIDMap, cleanedIssuers, err = parseTrustedIssuers(config.TrustedIssuers)
+			if err != nil {
+				log.Fatalf("Invalid TRUSTED_ISSUERS config: %v", err)
+			}
+			keyManager = NewJWKSManager(cleanedIssuers)
+		} else {
+			log.Fatal("Security is enabled but no trusted issuers or public key provided. Use --trusted-issuers, --public-key-path, or --no-security.")
+		}
+
+		if config.RequiredAudience != "" {
+			log.Printf("Enforcing audience: %s", config.RequiredAudience)
+		}
+	} else {
+		log.Println("Warning: Security disabled. Authentication will be bypassed.")
+	}
+}
+
+func parseTrustedIssuers(input string) (map[string]string, []string, error) {
+	idMap := make(map[string]string)
+	var cleanedIssuers []string
+
+	// Split by semicolon
+	rawIssuers := strings.Split(input, ";")
+	isMulti := len(rawIssuers) > 1
+
+	for _, entry := range rawIssuers {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		// Check for id prefix: id=issuer=url OR id=issuer
+		parts := strings.SplitN(entry, "=", 2)
+
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+
+			// Check if 'key' looks like a URL (Legacy Format)
+			if strings.HasPrefix(key, "http") {
+				if isMulti {
+					return nil, nil, fmt.Errorf("multi-issuer config requires ID mapping (id=issuer...) for entry: %s", entry)
 				}
-		
-				// Check for id prefix: id=issuer=url OR id=issuer
-				parts := strings.SplitN(entry, "=", 2)
-				
-				if len(parts) == 2 {
-					key := strings.TrimSpace(parts[0])
-					val := strings.TrimSpace(parts[1])
-		
-					// Check if 'key' looks like a URL (Legacy Format)
-					if strings.HasPrefix(key, "http") {
-						if isMulti {
-							return nil, nil, fmt.Errorf("multi-issuer config requires ID mapping (id=issuer...) for entry: %s", entry)
-						}
-						// Allow legacy for single entry
-						cleanedIssuers = append(cleanedIssuers, entry)
-					} else {
-						// Valid ID mapping found
-						if strings.Contains(val, "=") {
-							// Format: id=issuer=url
-							subParts := strings.SplitN(val, "=", 2)
-							issuer := strings.TrimSpace(subParts[0])
-							idMap[key] = issuer
-							cleanedIssuers = append(cleanedIssuers, val) // "issuer=url"
-						} else {
-							// Format: id=issuer (where issuer might be URL)
-							idMap[key] = val
-							cleanedIssuers = append(cleanedIssuers, val)
-						}
-					}
+				// Allow legacy for single entry
+				cleanedIssuers = append(cleanedIssuers, entry)
+			} else {
+				// Valid ID mapping found
+				if strings.Contains(val, "=") {
+					// Format: id=issuer=url
+					subParts := strings.SplitN(val, "=", 2)
+					issuer := strings.TrimSpace(subParts[0])
+					idMap[key] = issuer
+					cleanedIssuers = append(cleanedIssuers, val) // "issuer=url"
 				} else {
-					// No equals sign -> Just a URL (Legacy)
-					if isMulti {
-						return nil, nil, fmt.Errorf("multi-issuer config requires ID mapping (id=issuer...) for entry: %s", entry)
-					}
-					cleanedIssuers = append(cleanedIssuers, entry)
+					// Format: id=issuer (where issuer might be URL)
+					idMap[key] = val
+					cleanedIssuers = append(cleanedIssuers, val)
 				}
 			}
-			return idMap, cleanedIssuers, nil
+		} else {
+			// No equals sign -> Just a URL (Legacy)
+			if isMulti {
+				return nil, nil, fmt.Errorf("multi-issuer config requires ID mapping (id=issuer...) for entry: %s", entry)
+			}
+			cleanedIssuers = append(cleanedIssuers, entry)
 		}
+	}
+	return idMap, cleanedIssuers, nil
+}
 func timeSinceStart() time.Duration {
 	return time.Since(startTime)
 }
