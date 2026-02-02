@@ -107,10 +107,48 @@ func TestHandleBulk(t *testing.T) {
 	if len(foundFiles) != 2 {
 		t.Errorf("Expected 2 files, got %d", len(foundFiles))
 	}
-	if foundFiles["maven-artifact-1"] != "content1" {
-		t.Errorf("Content mismatch for maven-artifact-1")
+	if foundFiles["default/maven-artifact-1"] != "content1" {
+		t.Errorf("Content mismatch for default/maven-artifact-1: %v", foundFiles)
 	}
-	if _, ok := foundFiles["npm-artifact-1"]; ok {
+	if _, ok := foundFiles["default/npm-artifact-1"]; ok {
 		t.Errorf("Should not contain npm-artifact-1")
+	}
+
+	// 4. Test Global Success (Admin)
+	// Add another file in a different namespace
+	otherNsDir := filepath.Join(tmpDir, "other")
+	os.MkdirAll(otherNsDir, 0755)
+	os.WriteFile(filepath.Join(otherNsDir, "maven-artifact-3"), []byte("content3"), 0644)
+
+	req = httptest.NewRequest("GET", "/v8/bulk?prefix=maven-", nil) // No namespace
+	req.Header.Set("Authorization", "Bearer "+createToken("admin-role"))
+	w = httptest.NewRecorder()
+	handleBulk(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	tr = tar.NewReader(w.Body)
+	globalFiles := make(map[string]string)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, _ := io.ReadAll(tr)
+		globalFiles[header.Name] = string(content)
+	}
+
+	if len(globalFiles) != 3 {
+		t.Errorf("Expected 3 files in global bulk, got %d: %v", len(globalFiles), globalFiles)
+	}
+	if globalFiles["default/maven-artifact-1"] != "content1" {
+		t.Errorf("Expected default/maven-artifact-1")
+	}
+	if globalFiles["other/maven-artifact-3"] != "content3" {
+		t.Errorf("Expected other/maven-artifact-3")
 	}
 }

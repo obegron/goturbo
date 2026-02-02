@@ -55,16 +55,17 @@ turbo build
 
 | Flag                    | Env Variable           | Description                                                                                                         |
 | ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `-trusted-issuers`      | `TRUSTED_ISSUERS`      | Comma-separated list of trusted OIDC issuer URLs. Supports mapping specific discovery URLs: `issuer=discovery_url`. |
+| `-trusted-issuers`      | `TRUSTED_ISSUERS`      | List of trusted OIDC issuer URLs (separated by `;` or `,`). Supports mapping IDs and discovery URLs: `id=issuer=discovery_url` or `issuer=discovery_url`. The `id` is used for admin role scoping. |
 | `-required-audience`    | `REQUIRED_AUDIENCE`    | Required `aud` claim in the JWT.                                                                                    |
 | `-public-key-path`      | `PUBLIC_KEY_PATH`      | Path to a static RSA public key (PEM) for verifying tokens manually.                                                |
 | `-insecure-skip-verify` | `INSECURE_SKIP_VERIFY` | Skip TLS verification for OIDC discovery (useful for self-signed internal certs).                                   |
 
-**Example: Multiple Kubernetes Clusters**
-You can trust the same issuer name from multiple discovery endpoints (e.g., for multi-cluster support):
+**Example: Multi-Cluster with Admin Scoping**
+Define IDs for issuers to scope admin privileges. You can use a Kubernetes namespace as an admin role (e.g., `prod:admin-ci-ns`):
 
 ```bash
-export TRUSTED_ISSUERS="https://kubernetes.default.svc=https://cluster1.local,https://kubernetes.default.svc=https://cluster2.local"
+export TRUSTED_ISSUERS="prod=https://k8s.prod.svc=https://oidc.prod.local;dev=https://k8s.dev.svc=https://oidc.dev.local"
+export ADMIN_ROLES="prod:ci-admin;prod:admin-ci-ns;global-admin"
 ```
 
 **Example: Authenticated Client Usage**
@@ -75,6 +76,19 @@ export TURBO_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 turbo build
 ```
 
+### Bulk Artifact Download (Admin Only)
+
+Admin users can download a tarball of artifacts matching a prefix.
+
+**Endpoint:** `GET /v8/bulk?prefix=<prefix>&namespace=<namespace>`
+
+**Headers:**
+- `Authorization: Bearer <token>`
+
+**Requirements:**
+- The token must have an admin role configured in `ADMIN_ROLES`.
+- If the admin role is scoped (e.g., `prod:admin`), the token's issuer must match the ID (`prod`) defined in `TRUSTED_ISSUERS`.
+
 ### Namespace Isolation & RBAC
 
 If running in a multi-tenant environment (like Kubernetes), you can enforce strict isolation based on JWT claims.
@@ -84,7 +98,7 @@ If running in a multi-tenant environment (like Kubernetes), you can enforce stri
 | `-namespace-isolation` | `NAMESPACE_ISOLATION` | Use the Kubernetes namespace (from the token) as the `TURBO_TEAM` ID.                                                     |
 | `-role-pattern`        | `ROLE_PATTERN`        | Pattern to validate roles against the namespace. Use `{namespace}` as a placeholder. Example: `sec-role-{namespace}-dev`. |
 | `-role-claim-path`     | `ROLE_CLAIM_PATH`     | JSON path to the roles/groups claim in the JWT. Default: `groups`.                                                        |
-| `-admin-roles`         | `ADMIN_ROLES`         | Comma-separated list of roles that have universal write access.                                                           |
+| `-admin-roles`         | `ADMIN_ROLES`         | List of roles that have admin access (separated by `;` or `,`). Supports scoping to specific Issuer IDs: `id:role` (e.g., `prod:admin-group` or `prod:k8s-namespace`) or global roles. |
 
 ---
 

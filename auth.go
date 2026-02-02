@@ -251,6 +251,16 @@ func parseECPublicKey(crv, xStr, yStr string) (*ecdsa.PublicKey, error) {
 }
 
 func hasAccess(token *jwt.Token, namespace string, operation string, hash string) bool {
+	// 0. Verify Issuer consistency if an ID mapping exists for this namespace
+	if expectedIss, ok := config.IssuerIDMap[namespace]; ok {
+		iss, err := token.Claims.GetIssuer()
+		if err != nil || iss != expectedIss {
+			log.Printf("%s %s [%s] - Forbidden: issuer mismatch (expected: %s, got: %s)",
+				operation, hash, namespace, expectedIss, iss)
+			return false
+		}
+	}
+
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return false

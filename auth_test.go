@@ -120,6 +120,22 @@ func TestHasAccess(t *testing.T) {
 			t.Error("expected no access")
 		}
 	})
+
+	t.Run("Wrong Issuer access", func(t *testing.T) {
+		config.IssuerIDMap = map[string]string{
+			"prod-ns": "https://prod.iss",
+		}
+		token := &jwt.Token{
+			Claims: jwt.MapClaims{
+				"iss":    "https://dev.iss",
+				"groups": []interface{}{"role-prod-ns"},
+			},
+		}
+		// Even if they have the right role name, the issuer is wrong for "prod-ns"
+		if hasAccess(token, "prod-ns", "GET", "hash") {
+			t.Error("expected no access due to issuer mismatch")
+		}
+	})
 }
 
 func TestHasAdminAccess(t *testing.T) {
