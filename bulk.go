@@ -139,12 +139,12 @@ func handleBulk(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Error opening file %s: %v", path, err)
 			return nil
 		}
-		defer f.Close()
-
 		if _, err := io.Copy(tw, f); err != nil {
 			log.Printf("Error writing file content %s: %v", path, err)
+			f.Close()
 			return err
 		}
+		f.Close()
 
 		return nil
 	})
@@ -152,9 +152,4 @@ func handleBulk(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error during bulk walk: %v", err)
 		// Can't really send error to client now as we started streaming
 	}
-}
-
-// Helper to check for gzip content if needed, but user just said "tar".
-func isGzip(r io.Reader) (bool, error) {
-	return false, nil // Not implementing auto-detection for now
 }
