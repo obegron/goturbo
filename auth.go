@@ -42,15 +42,25 @@ type JWKSManager struct {
 func NewJWKSManager(issuers []string) *JWKSManager {
 	issuerMap := make(map[string][]string)
 	for _, iss := range issuers {
-		parts := strings.SplitN(iss, "=", 2)
+		// Format: <id>=<issuer>=<discoveryURL> or just <issuer> or <issuer>=<discoveryURL>
+		parts := strings.Split(iss, "=")
+
 		var issuer, discoveryURL string
-		if len(parts) == 2 {
+
+		if len(parts) == 3 {
+			issuer = strings.TrimSpace(parts[1])
+			discoveryURL = strings.TrimSpace(parts[2])
+		} else if len(parts) == 2 {
+			// Format: issuer=discoveryURL
 			issuer = strings.TrimSpace(parts[0])
 			discoveryURL = strings.TrimSpace(parts[1])
 		} else {
+			// Format: just issuer (issuer == discoveryURL)
 			issuer = strings.TrimSpace(iss)
 			discoveryURL = issuer
 		}
+
+		log.Printf("Registered OIDC issuer: %s -> %s", issuer, discoveryURL)
 		issuerMap[issuer] = append(issuerMap[issuer], discoveryURL)
 	}
 	return &JWKSManager{
@@ -116,9 +126,10 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 	}
 
 	var lastErr error
-	var jwks JWKS
-	found := false
+	var allKeys []JWK
+	successCount := 0
 
+	// Fetch keys from ALL discovery URLs and merge them
 	for _, discoveryURL := range discoveryURLs {
 		// 1. OIDC Discovery
 		wellKnownURL := strings.TrimSuffix(discoveryURL, "/") + "/.well-known/openid-configuration"
@@ -162,6 +173,7 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 			continue
 		}
 
+		var jwks JWKS
 		if err := json.NewDecoder(jwksResp.Body).Decode(&jwks); err != nil {
 			jwksResp.Body.Close()
 			lastErr = fmt.Errorf("failed to decode JWKS from %s: %w", discoveryConfig.JwksURI, err)
@@ -170,19 +182,22 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 		}
 		jwksResp.Body.Close()
 
-		found = true
-		break // Success, stop trying other URLs
+		// Merge keys from this discovery URL
+		allKeys = append(allKeys, jwks.Keys...)
+		successCount++
+		log.Printf("Successfully fetched %d keys from %s", len(jwks.Keys), discoveryConfig.JwksURI)
 	}
 
-	if !found {
-		return fmt.Errorf("failed to refresh keys for issuer %s: %w", issuer, lastErr)
+	if successCount == 0 {
+		return fmt.Errorf("failed to refresh keys for issuer %s from any discovery URL: %w", issuer, lastErr)
 	}
 
 	// 3. Parse and Store Keys
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, jwk := range jwks.Keys {
+	keyCount := 0
+	for _, jwk := range allKeys {
 		var pubKey interface{}
 		var err error
 
@@ -201,8 +216,10 @@ func (m *JWKSManager) refreshKeys(issuer string) error {
 
 		keyID := fmt.Sprintf("%s|%s", issuer, jwk.Kid)
 		m.keys[keyID] = pubKey
+		keyCount++
 	}
 
+	log.Printf("Loaded %d keys for issuer %s from %d discovery URLs", keyCount, issuer, successCount)
 	return nil
 }
 

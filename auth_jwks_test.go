@@ -229,3 +229,156 @@ func TestJWKSManager_TLS(t *testing.T) {
 		t.Errorf("Should have skipped verification, but got cert error: %v", err)
 	}
 }
+
+func TestNewJWKSManager(t *testing.T) {
+	t.Run("Three-part format: id=issuer=discoveryURL", func(t *testing.T) {
+		issuers := []string{
+			"oidc1=https://kubernetes.default.svc=https://k8s1.example.com",
+			"oidc2=https://kubernetes.default.svc=https://k8s2.example.com",
+		}
+
+		manager := NewJWKSManager(issuers)
+
+		// Verify that both issuers are registered with the same issuer URL but different discovery URLs
+		if len(manager.trustedIssuers) != 1 {
+			t.Errorf("Expected 1 unique issuer, got %d", len(manager.trustedIssuers))
+		}
+
+		issuer := "https://kubernetes.default.svc"
+		discoveryURLs, ok := manager.trustedIssuers[issuer]
+		if !ok {
+			t.Fatalf("Issuer %s not found in trustedIssuers", issuer)
+		}
+
+		if len(discoveryURLs) != 2 {
+			t.Fatalf("Expected 2 discovery URLs for issuer, got %d", len(discoveryURLs))
+		}
+
+		expectedURLs := map[string]bool{
+			"https://k8s1.example.com": true,
+			"https://k8s2.example.com": true,
+		}
+
+		for _, url := range discoveryURLs {
+			if !expectedURLs[url] {
+				t.Errorf("Unexpected discovery URL: %s", url)
+			}
+			delete(expectedURLs, url)
+		}
+
+		if len(expectedURLs) > 0 {
+			t.Errorf("Missing discovery URLs: %v", expectedURLs)
+		}
+	})
+
+	t.Run("Two-part format: issuer=discoveryURL", func(t *testing.T) {
+		issuers := []string{
+			"https://auth.example.com=https://oidc.example.com",
+		}
+
+		manager := NewJWKSManager(issuers)
+
+		if len(manager.trustedIssuers) != 1 {
+			t.Errorf("Expected 1 issuer, got %d", len(manager.trustedIssuers))
+		}
+
+		discoveryURLs, ok := manager.trustedIssuers["https://auth.example.com"]
+		if !ok {
+			t.Fatal("Issuer https://auth.example.com not found")
+		}
+
+		if len(discoveryURLs) != 1 || discoveryURLs[0] != "https://oidc.example.com" {
+			t.Errorf("Expected [https://oidc.example.com], got %v", discoveryURLs)
+		}
+	})
+
+	t.Run("Single format: issuer only", func(t *testing.T) {
+		issuers := []string{
+			"https://accounts.google.com",
+		}
+
+		manager := NewJWKSManager(issuers)
+
+		if len(manager.trustedIssuers) != 1 {
+			t.Errorf("Expected 1 issuer, got %d", len(manager.trustedIssuers))
+		}
+
+		discoveryURLs, ok := manager.trustedIssuers["https://accounts.google.com"]
+		if !ok {
+			t.Fatal("Issuer https://accounts.google.com not found")
+		}
+
+		if len(discoveryURLs) != 1 || discoveryURLs[0] != "https://accounts.google.com" {
+			t.Errorf("Expected [https://accounts.google.com], got %v", discoveryURLs)
+		}
+	})
+
+	t.Run("Mixed formats", func(t *testing.T) {
+		issuers := []string{
+			"id1=https://k8s.default=https://oidc-1.example.com",
+			"id2=https://k8s.default=https://oidc-2.example.com",
+			"https://auth.solo.com=https://oidc.solo.com",
+			"https://accounts.google.com",
+		}
+
+		manager := NewJWKSManager(issuers)
+
+		// Should have 3 unique issuers
+		if len(manager.trustedIssuers) != 3 {
+			t.Errorf("Expected 3 unique issuers, got %d", len(manager.trustedIssuers))
+		}
+
+		// Check k8s.default has 2 discovery URLs
+		discoveryURLs, ok := manager.trustedIssuers["https://k8s.default"]
+		if !ok {
+			t.Fatal("Issuer https://k8s.default not found")
+		}
+		if len(discoveryURLs) != 2 {
+			t.Fatalf("Expected 2 discovery URLs for k8s.default, got %d", len(discoveryURLs))
+		}
+
+		// Check auth.solo.com
+		discoveryURLs, ok = manager.trustedIssuers["https://auth.solo.com"]
+		if !ok {
+			t.Fatal("Issuer https://auth.solo.com not found")
+		}
+		if len(discoveryURLs) != 1 || discoveryURLs[0] != "https://oidc.solo.com" {
+			t.Errorf("Expected [https://oidc.solo.com], got %v", discoveryURLs)
+		}
+
+		// Check accounts.google.com
+		discoveryURLs, ok = manager.trustedIssuers["https://accounts.google.com"]
+		if !ok {
+			t.Fatal("Issuer https://accounts.google.com not found")
+		}
+		if len(discoveryURLs) != 1 || discoveryURLs[0] != "https://accounts.google.com" {
+			t.Errorf("Expected [https://accounts.google.com], got %v", discoveryURLs)
+		}
+	})
+
+	t.Run("Whitespace trimming", func(t *testing.T) {
+		issuers := []string{
+			" id1 = https://issuer.com = https://discovery.com ",
+			"  https://other.com  ",
+		}
+
+		manager := NewJWKSManager(issuers)
+
+		// Check trimmed values
+		discoveryURLs, ok := manager.trustedIssuers["https://issuer.com"]
+		if !ok {
+			t.Fatal("Issuer https://issuer.com not found (whitespace issue?)")
+		}
+		if len(discoveryURLs) != 1 || discoveryURLs[0] != "https://discovery.com" {
+			t.Errorf("Expected [https://discovery.com], got %v (whitespace issue?)", discoveryURLs)
+		}
+
+		discoveryURLs, ok = manager.trustedIssuers["https://other.com"]
+		if !ok {
+			t.Fatal("Issuer https://other.com not found (whitespace issue?)")
+		}
+		if len(discoveryURLs) != 1 || discoveryURLs[0] != "https://other.com" {
+			t.Errorf("Expected [https://other.com], got %v (whitespace issue?)", discoveryURLs)
+		}
+	})
+}
