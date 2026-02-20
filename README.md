@@ -1,6 +1,6 @@
 # goTurbo
 
-**goTurbo** is a lightweight, on-premise remote cache server for [Vercel Turbo](https://turbo.build/). It is designed to run within your infrastructure (e.g., Kubernetes), allowing you to cache build artifacts securely and efficiently without relying on external services.
+**goTurbo** is a lightweight, on-premise remote cache server for [Vercel Turbo](https://turbo.build/) and Maven (WebDAV). It is designed to run within your infrastructure (e.g., Kubernetes), allowing you to cache build artifacts securely and efficiently without relying on external services.
 
 The Docker image is available at: `obegron/goturbo:latest`
 
@@ -35,6 +35,56 @@ export TURBO_TEAM="my-team"
 turbo build
 ```
 
+### 3. Configure the Client (Maven Build Cache via WebDAV)
+
+Maven uses a namespace-first path:
+
+- Endpoint pattern: `http(s)://<host>/maven/<namespace>/...`
+- Example namespace: `team-a`
+
+The server enforces OIDC/JWT the same way as Turborepo endpoints. The namespace is taken from the first path segment after `/maven/`.
+
+`maven-build-cache-config.xml` example:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<cache xmlns="http://maven.apache.org">
+  <configuration>
+    <enabled>true</enabled>
+  </configuration>
+  <remote enabled="true" id="goturbo-maven">
+    <url>http://localhost:8080/maven/team-a/</url>
+  </remote>
+</cache>
+```
+
+`settings.xml` example with OIDC bearer token header:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>goturbo-maven</id>
+      <configuration>
+        <httpHeaders>
+          <property>
+            <name>Authorization</name>
+            <value>Bearer ${env.OIDC_TOKEN}</value>
+          </property>
+        </httpHeaders>
+      </configuration>
+    </server>
+  </servers>
+</settings>
+```
+
+Example:
+
+```bash
+export OIDC_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+mvn -Dmaven.build.cache.remote.save.enabled=true verify
+```
+
 ---
 
 ## Configuration
@@ -46,6 +96,8 @@ turbo build
 | `-port`             | `PORT`             | `8080`             | HTTP server port.                                       |
 | `-cache-dir`        | `CACHE_DIR`        | `/tmp/turbo-cache` | Directory for storing cache artifacts.                  |
 | `-cache-max-age`    | `CACHE_MAX_AGE`    | `24h`              | Max age for cache retention.                            |
+| `-disable-turbo`    | `DISABLE_TURBO`    | `false`            | Disable Turborepo endpoints (`/v8/...`). |
+| `-disable-maven`    | `DISABLE_MAVEN`    | `false`            | Disable Maven WebDAV endpoint (`/maven/...`). |
 | `-no-security`      | `NO_SECURITY`      | `false`            | Disable all authentication. Open for read/write.        |
 | `-no-security-read` | `NO_SECURITY_READ` | `false`            | Disable read authentication. Writes still require auth. |
 
@@ -82,6 +134,12 @@ Admin users can download a tarball of artifacts matching a prefix.
 
 **Endpoint:** `GET /v8/bulk?prefix=<prefix>&namespace=<namespace>`
 
+### Maven Endpoint
+
+- WebDAV endpoint: `/maven/{namespace}/...`
+- Supported WebDAV operations are handled by the built-in WebDAV handler (e.g., `PUT`, `GET`, `HEAD`, `PROPFIND`, `MKCOL`, `DELETE`).
+- `NO_SECURITY_READ=true` allows unauthenticated read-like methods (`GET`, `HEAD`, `OPTIONS`, `PROPFIND`) for Maven as well.
+
 **Headers:**
 
 - `Authorization: Bearer <token>`
@@ -90,6 +148,34 @@ Admin users can download a tarball of artifacts matching a prefix.
 
 - The token must have an admin role configured in `ADMIN_ROLES`.
 - If the admin role is scoped (e.g., `prod:admin`), the token's issuer must match the ID (`prod`) defined in `TRUSTED_ISSUERS`.
+
+### Maven Integration Smoke Directory
+
+A standalone smoke setup lives in `integration/maven-webdav-smoke/`:
+
+- real Maven project (`pom.xml`, `.mvn/extensions.xml`, `.mvn/maven-build-cache-config.xml`)
+- `settings.xml` for remote server mapping
+- script to run against a real `goturbo` Docker container with `NO_SECURITY=true`
+
+Run:
+
+```bash
+./integration/maven-webdav-smoke/run.sh
+```
+
+k3d variant (cluster + Kubernetes `emptyDir` cache):
+
+```bash
+./integration/maven-webdav-smoke/run-k3d.sh
+```
+
+### Metrics (Turbo vs Maven)
+
+`/metrics` now exposes both aggregate and per-backend metrics:
+
+- Aggregate (backward compatible): `goturbo_hits_total`, `goturbo_misses_total`, `goturbo_cache_hit_ratio`
+- Turborepo-specific: `goturbo_turbo_hits_total`, `goturbo_turbo_misses_total`, `goturbo_turbo_hit_ratio`, `goturbo_turbo_put_success_total`, `goturbo_turbo_put_errors_total`
+- Maven-specific: `goturbo_maven_hits_total`, `goturbo_maven_misses_total`, `goturbo_maven_hit_ratio`, `goturbo_maven_put_success_total`, `goturbo_maven_put_errors_total`
 
 ### Namespace Isolation & RBAC
 

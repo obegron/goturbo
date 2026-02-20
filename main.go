@@ -11,7 +11,7 @@ import (
 	time "time"
 )
 
-const Version = "0.5.2"
+const Version = "0.6.0"
 
 func main() {
 	// Initialize configuration
@@ -27,13 +27,7 @@ func main() {
 	go cleanupLoop()
 
 	// Setup routes
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleStatus)
-	mux.HandleFunc("/metrics", handleMetrics)
-	mux.HandleFunc("/v8/artifacts/", handleArtifacts) // Handles GET and PUT
-	mux.HandleFunc("/v8/bulk", handleBulk)
-	mux.HandleFunc("/v8/artifacts/events", handleEvents)
-	mux.HandleFunc("/health", handleHealth)
+	mux := buildMux()
 
 	// Apply Middleware
 	handler := withServerHeader(mux)
@@ -64,6 +58,25 @@ func main() {
 	}
 
 	log.Println("Server exiting")
+}
+
+func buildMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleStatus)
+	mux.HandleFunc("/metrics", handleMetrics)
+	mux.HandleFunc("/health", handleHealth)
+
+	if !config.DisableTurbo {
+		mux.HandleFunc("/v8/artifacts/", handleArtifacts) // Handles GET and PUT
+		mux.HandleFunc("/v8/bulk", handleBulk)
+		mux.HandleFunc("/v8/artifacts/events", handleEvents)
+	}
+
+	if !config.DisableMaven {
+		mux.HandleFunc("/maven/", handleMaven)
+	}
+
+	return mux
 }
 
 func withServerHeader(next http.Handler) http.Handler {

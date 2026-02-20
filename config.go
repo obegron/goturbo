@@ -18,6 +18,8 @@ import (
 type Config struct {
 	Port               string
 	CacheDir           string
+	DisableTurbo       bool
+	DisableMaven       bool
 	TrustedIssuers     string
 	RequiredAudience   string
 	PublicKeyPath      string
@@ -43,6 +45,8 @@ var (
 func InitConfig() {
 	flag.StringVar(&config.Port, "port", lookupEnvOr("PORT", "8080"), "HTTP server port")
 	flag.StringVar(&config.CacheDir, "cache-dir", lookupEnvOr("CACHE_DIR", "/tmp/turbo-cache"), "Directory for cache storage")
+	flag.BoolVar(&config.DisableTurbo, "disable-turbo", lookupEnvBool("DISABLE_TURBO", false), "Disable Turborepo endpoints (/v8/...)")
+	flag.BoolVar(&config.DisableMaven, "disable-maven", lookupEnvBool("DISABLE_MAVEN", false), "Disable Maven WebDAV endpoint (/maven/...)")
 	flag.StringVar(&config.TrustedIssuers, "trusted-issuers", lookupEnvOr("TRUSTED_ISSUERS", ""), "Comma-separated list of trusted issuer URLs (can be id=issuer=url or issuer=url)")
 	flag.StringVar(&config.RequiredAudience, "required-audience", lookupEnvOr("REQUIRED_AUDIENCE", ""), "Required Audience (aud) claim in JWT")
 	flag.StringVar(&config.PublicKeyPath, "public-key-path", lookupEnvOr("PUBLIC_KEY_PATH", ""), "Path to static RSA public key (PEM)")
@@ -99,6 +103,11 @@ func Configure() {
 	if config.InsecureSkipVerify {
 		log.Println("⚠️ TLS verification for OIDC discovery DISABLED")
 	}
+
+	if config.DisableTurbo && config.DisableMaven {
+		log.Fatal("At least one cache backend must be enabled. Set DISABLE_TURBO=false and/or DISABLE_MAVEN=false.")
+	}
+	log.Printf("Endpoints: turbo=%t maven=%t", !config.DisableTurbo, !config.DisableMaven)
 
 	// Ensure cache directory exists
 	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {

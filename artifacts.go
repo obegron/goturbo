@@ -106,7 +106,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 		// Check access
 		if !hasAccess(token, teamID, "GET", hash) {
-			atomic.AddUint64(&misses, 1)
+			atomic.AddUint64(&turboMisses, 1)
 			http.Error(w, "Forbidden: no access to this namespace", http.StatusForbidden)
 			return
 		}
@@ -116,7 +116,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	path := filepath.Join(config.CacheDir, teamID, hash)
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		atomic.AddUint64(&misses, 1)
+		atomic.AddUint64(&turboMisses, 1)
 		log.Printf("GET %s [%s] - Miss", hash, teamID)
 		w.Header().Set("X-goTurbo-Cache", "MISS")
 		http.NotFound(w, r)
@@ -133,7 +133,7 @@ func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	w.WriteHeader(http.StatusOK)
 	n, _ := io.Copy(w, f)
 	duration := time.Since(start)
-	atomic.AddUint64(&hits, 1)
+	atomic.AddUint64(&turboHits, 1)
 	log.Printf("GET %s [%s] - %d bytes in %v", hash, teamID, n, duration)
 }
 
@@ -150,7 +150,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	// Validate teamID to ensure it is a single safe path component
 	teamID, ok := sanitizePathComponent(teamID)
 	if !ok {
-		atomic.AddUint64(&putErrors, 1)
+		atomic.AddUint64(&turboPutErrors, 1)
 		http.Error(w, "Invalid team ID", http.StatusBadRequest)
 		return
 	}
@@ -159,7 +159,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	if !config.NoSecurity {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			atomic.AddUint64(&putErrors, 1)
+			atomic.AddUint64(&turboPutErrors, 1)
 			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
 			return
 		}
@@ -178,7 +178,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		})
 
 		if err != nil || !token.Valid {
-			atomic.AddUint64(&putErrors, 1)
+			atomic.AddUint64(&turboPutErrors, 1)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			log.Printf("Auth failed for %s [%s]: %v", hash, teamID, err)
 			return
@@ -188,7 +188,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		if config.RequiredAudience != "" {
 			audiences, err := token.Claims.GetAudience()
 			if err != nil {
-				atomic.AddUint64(&putErrors, 1)
+				atomic.AddUint64(&turboPutErrors, 1)
 				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
 				log.Printf("Auth failed for %s [%s]: failed to parse audience", hash, teamID)
 				return
@@ -202,7 +202,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 				}
 			}
 			if !validAud {
-				atomic.AddUint64(&putErrors, 1)
+				atomic.AddUint64(&turboPutErrors, 1)
 				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
 				log.Printf("Auth failed for %s [%s]: invalid audience %v (required: %s)", hash, teamID, audiences, config.RequiredAudience)
 				return
@@ -211,7 +211,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 
 		// Check access
 		if !hasAccess(token, teamID, "PUT", hash) {
-			atomic.AddUint64(&putErrors, 1)
+			atomic.AddUint64(&turboPutErrors, 1)
 			http.Error(w, "Forbidden: no access to this namespace", http.StatusForbidden)
 			return
 		}
@@ -220,7 +220,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	// Ensure team directory exists
 	teamPath := filepath.Join(config.CacheDir, teamID)
 	if err := os.MkdirAll(teamPath, 0755); err != nil {
-		atomic.AddUint64(&putErrors, 1)
+		atomic.AddUint64(&turboPutErrors, 1)
 		log.Printf("Failed to create team directory %s: %v", teamID, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -239,7 +239,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	tmpPath := path + ".tmp"
 	f, err := os.Create(tmpPath)
 	if err != nil {
-		atomic.AddUint64(&putErrors, 1)
+		atomic.AddUint64(&turboPutErrors, 1)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -248,14 +248,14 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	f.Close()
 	duration := time.Since(start)
 	if err != nil {
-		atomic.AddUint64(&putErrors, 1)
+		atomic.AddUint64(&turboPutErrors, 1)
 		os.Remove(tmpPath)
 		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
 		return
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		atomic.AddUint64(&putErrors, 1)
+		atomic.AddUint64(&turboPutErrors, 1)
 		os.Remove(tmpPath)
 		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
 		return
@@ -275,7 +275,7 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	atomic.AddUint64(&putSuccess, 1)
+	atomic.AddUint64(&turboPutSuccess, 1)
 	log.Printf("PUT %s [%s] - %d bytes in %v", hash, teamID, written, duration)
 }
 
