@@ -30,7 +30,7 @@ help:
 	@echo "goTurbo build targets:"
 	@echo "  make build        - Build local binary (stripped)"
 	@echo "  make run          - Run locally"
-	@echo "  make smoke-maven-k3d - Run Maven WebDAV smoke test in a fresh k3d cluster"
+	@echo "  make smoke-maven-k3d - Run Maven HTTP smoke test in a fresh k3d cluster"
 	@echo "  make docker-build - Build multi-arch Docker image"
 	@echo "  make docker-push  - Build and push to registry"
 	@echo "  make show-version - Show current version"

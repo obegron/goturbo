@@ -13,12 +13,11 @@ func TestRecordMavenMetrics(t *testing.T) {
 
 	recordMavenMetrics("GET", 200)
 	recordMavenMetrics("GET", 404)
-	recordMavenMetrics("PROPFIND", 207)
 	recordMavenMetrics("PUT", 201)
 	recordMavenMetrics("PUT", 500)
 
-	if got := atomic.LoadUint64(&mavenHits); got != 2 {
-		t.Fatalf("mavenHits = %d, want 2", got)
+	if got := atomic.LoadUint64(&mavenHits); got != 1 {
+		t.Fatalf("mavenHits = %d, want 1", got)
 	}
 	if got := atomic.LoadUint64(&mavenMisses); got != 1 {
 		t.Fatalf("mavenMisses = %d, want 1", got)

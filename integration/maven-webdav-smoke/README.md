@@ -1,4 +1,4 @@
-# Maven WebDAV Smoke
+# Maven HTTP Smoke
 
 This integration directory runs a real Maven build against a real `goturbo` Docker container.
 
@@ -6,7 +6,7 @@ This integration directory runs a real Maven build against a real `goturbo` Dock
 
 1. Builds local `goturbo` image.
 2. Starts container with `NO_SECURITY=true`.
-3. Runs Maven build using the Apache Maven Build Cache Extension against `/maven/<namespace>/...`.
+3. Runs Maven build using the Apache Maven Build Cache Extension against `/maven/<namespace>/...` over plain HTTP.
 4. Verifies remote cache save/read behavior from Maven output.
 5. Runs a second Maven build with remote save disabled.
 
@@ -18,7 +18,7 @@ This integration directory runs a real Maven build against a real `goturbo` Dock
 
 ## Run On k3d
 
-Creates a fresh local cluster, deploys `goturbo` with `emptyDir` cache storage, and verifies WebDAV writes/reads.
+Creates a fresh local cluster, deploys `goturbo` with `emptyDir` cache storage, and verifies HTTP cache writes/reads.
 
 ```bash
 ./integration/maven-webdav-smoke/run-k3d.sh

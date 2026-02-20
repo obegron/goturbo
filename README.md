@@ -1,6 +1,6 @@
 # goTurbo
 
-**goTurbo** is a lightweight, on-premise remote cache server for [Vercel Turbo](https://turbo.build/) and Maven (WebDAV). It is designed to run within your infrastructure (e.g., Kubernetes), allowing you to cache build artifacts securely and efficiently without relying on external services.
+**goTurbo** is a lightweight, on-premise remote cache server for [Vercel Turbo](https://turbo.build/) and Maven (HTTP remote cache). It is designed to run within your infrastructure (e.g., Kubernetes), allowing you to cache build artifacts securely and efficiently without relying on external services.
 
 The Docker image is available at: `obegron/goturbo:latest`
 
@@ -35,9 +35,9 @@ export TURBO_TEAM="my-team"
 turbo build
 ```
 
-### 3. Configure the Client (Maven Build Cache via WebDAV)
+### 3. Configure the Client (Maven Build Cache via HTTP)
 
-Maven uses a namespace-first path:
+Maven uses a namespace-first HTTP path:
 
 - Endpoint pattern: `http(s)://<host>/maven/<namespace>/...`
 - Example namespace: `team-a`
@@ -134,11 +134,11 @@ Admin users can download a tarball of artifacts matching a prefix.
 
 **Endpoint:** `GET /v8/bulk?prefix=<prefix>&namespace=<namespace>`
 
-### Maven Endpoint
+### Maven Endpoint (HTTP)
 
-- WebDAV endpoint: `/maven/{namespace}/...`
-- Supported WebDAV operations are handled by the built-in WebDAV handler (e.g., `PUT`, `GET`, `HEAD`, `PROPFIND`, `MKCOL`, `DELETE`).
-- `NO_SECURITY_READ=true` allows unauthenticated read-like methods (`GET`, `HEAD`, `OPTIONS`, `PROPFIND`) for Maven as well.
+- HTTP endpoint: `/maven/{namespace}/...`
+- Supported methods: `PUT`, `GET`, `HEAD`
+- `NO_SECURITY_READ=true` allows unauthenticated read methods (`GET`, `HEAD`) for Maven as well.
 
 **Headers:**
 
@@ -146,8 +146,8 @@ Admin users can download a tarball of artifacts matching a prefix.
 
 **Requirements:**
 
-- The token must have an admin role configured in `ADMIN_ROLES`.
-- If the admin role is scoped (e.g., `prod:admin`), the token's issuer must match the ID (`prod`) defined in `TRUSTED_ISSUERS`.
+- Maven endpoint access is namespace-scoped and uses the same regular access checks as Turbo artifacts.
+- Admin roles are only required for bulk endpoint (`/v8/bulk`), not for Maven cache read/write.
 
 ### Maven Integration Smoke Directory
 

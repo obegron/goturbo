@@ -94,7 +94,7 @@ for _ in $(seq 1 50); do
 done
 curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null
 
-echo "WebDAV write/read smoke check"
+echo "HTTP write/read smoke check"
 curl -fsS -X PUT --data-binary "hello-k3d-cache" \
   "http://127.0.0.1:$PORT/maven/$MAVEN_NAMESPACE/v1.1/com.example/smoke/item.txt" >/dev/null
 
@@ -105,4 +105,4 @@ if [[ "$RESP" != "hello-k3d-cache" ]]; then
 fi
 
 echo "k3d smoke test completed successfully"
-echo "Verified WebDAV PUT/GET through Kubernetes service"
+echo "Verified HTTP PUT/GET through Kubernetes service"

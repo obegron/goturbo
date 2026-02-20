@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -10,14 +11,15 @@ import (
 	"sync/atomic"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/net/webdav"
 )
-
-var mavenLockSystem = webdav.NewMemLS()
 
 func handleMaven(w http.ResponseWriter, r *http.Request) {
 	namespace, relPath, ok := parseMavenPath(r.URL.Path)
 	if !ok {
+		http.Error(w, "Invalid Maven path. Expected /maven/{namespace}/...", http.StatusBadRequest)
+		return
+	}
+	if relPath == "" {
 		http.Error(w, "Invalid Maven path. Expected /maven/{namespace}/...", http.StatusBadRequest)
 		return
 	}
@@ -49,50 +51,98 @@ func handleMaven(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := "/"
-	if relPath != "" {
-		path = "/" + relPath
+	artifactPath := filepath.Join(namespaceDir, filepath.Clean(relPath))
+	if artifactPath == namespaceDir {
+		http.Error(w, "Invalid Maven path", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(artifactPath, namespaceDir+string(filepath.Separator)) {
+		http.Error(w, "Invalid Maven path", http.StatusBadRequest)
+		return
 	}
 
-	if r.Method == http.MethodPut {
-		parent := filepath.Dir(relPath)
-		if parent != "." && parent != "/" {
-			if err := os.MkdirAll(filepath.Join(namespaceDir, parent), 0755); err != nil {
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				log.Printf("Failed to create Maven parent dirs %s: %v", parent, err)
-				return
-			}
-		}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		getMavenArtifact(w, r, artifactPath, r.Method == http.MethodHead)
+	case http.MethodPut:
+		putMavenArtifact(w, r, artifactPath)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		recordMavenMetrics(r.Method, http.StatusMethodNotAllowed)
 	}
-
-	davReq := r.Clone(r.Context())
-	urlCopy := *r.URL
-	urlCopy.Path = path
-	davReq.URL = &urlCopy
-
-	dav := &webdav.Handler{
-		Prefix:     "/",
-		FileSystem: webdav.Dir(namespaceDir),
-		LockSystem: mavenLockSystem,
-	}
-	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-	dav.ServeHTTP(rec, davReq)
-	recordMavenMetrics(r.Method, rec.status)
 }
 
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
+func getMavenArtifact(w http.ResponseWriter, r *http.Request, path string, headOnly bool) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		http.NotFound(w, r)
+		recordMavenMetrics(http.MethodGet, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		recordMavenMetrics(http.MethodGet, http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err == nil {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if !headOnly {
+		_, _ = io.Copy(w, f)
+	}
+	recordMavenMetrics(http.MethodGet, http.StatusOK)
 }
 
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
+func putMavenArtifact(w http.ResponseWriter, r *http.Request, path string) {
+	defer r.Body.Close()
+
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		atomic.AddUint64(&mavenPutErrors, 1)
+		return
+	}
+
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		atomic.AddUint64(&mavenPutErrors, 1)
+		return
+	}
+
+	if _, err := io.Copy(f, r.Body); err != nil {
+		f.Close()
+		_ = os.Remove(tmpPath)
+		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
+		atomic.AddUint64(&mavenPutErrors, 1)
+		return
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
+		atomic.AddUint64(&mavenPutErrors, 1)
+		return
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
+		atomic.AddUint64(&mavenPutErrors, 1)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	atomic.AddUint64(&mavenPutSuccess, 1)
 }
 
 func recordMavenMetrics(method string, status int) {
 	switch method {
-	case http.MethodGet, http.MethodHead, "PROPFIND":
+	case http.MethodGet, http.MethodHead:
 		if status == http.StatusNotFound {
 			atomic.AddUint64(&mavenMisses, 1)
 			return
@@ -145,7 +195,7 @@ func shouldAuthenticateMavenRequest(method string) bool {
 
 func isReadLikeMavenMethod(method string) bool {
 	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions, "PROPFIND":
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	default:
 		return false

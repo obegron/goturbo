@@ -50,7 +50,7 @@ done
 curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null
 
 cp -R "$SMOKE_DIR/app/." "$PROJECT_DIR/"
-REMOTE_URL="dav:http://127.0.0.1:$PORT/maven/$NAMESPACE/"
+REMOTE_URL="http://127.0.0.1:$PORT/maven/$NAMESPACE/"
 sed -i "s|__REMOTE_URL__|$REMOTE_URL|g" "$PROJECT_DIR/.mvn/maven-build-cache-config.xml"
 sed -i "s|<version>1.2.2</version>|<version>$EXT_VERSION</version>|g" "$PROJECT_DIR/.mvn/extensions.xml"
 
@@ -60,7 +60,6 @@ mvn -B -ntp \
   -s "$SMOKE_DIR/settings.xml" \
   -f "$PROJECT_DIR/pom.xml" \
   -Dmaven.repo.local="$REPO1_DIR" \
-  -Daether.connector.http.supportWebDav=true \
   -Dmaven.build.cache.remote.save.enabled=true \
   clean package | tee "$RUN1_LOG"
 
@@ -77,7 +76,6 @@ mvn -B -ntp \
   -s "$SMOKE_DIR/settings.xml" \
   -f "$PROJECT_DIR/pom.xml" \
   -Dmaven.repo.local="$REPO2_DIR" \
-  -Daether.connector.http.supportWebDav=true \
   -Dmaven.build.cache.remote.save.enabled=false \
   -Dmaven.build.cache.remote.load.enabled=true \
   clean package | tee "$RUN2_LOG"
