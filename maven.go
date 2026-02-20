@@ -19,7 +19,7 @@ func handleMaven(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid Maven path. Expected /maven/{namespace}/...", http.StatusBadRequest)
 		return
 	}
-	if relPath == "" {
+	if relPath == "" && r.Method != http.MethodHead {
 		http.Error(w, "Invalid Maven path. Expected /maven/{namespace}/...", http.StatusBadRequest)
 		return
 	}
@@ -42,6 +42,10 @@ func handleMaven(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Forbidden: no access to this namespace", http.StatusForbidden)
 			return
 		}
+	}
+	if relPath == "" && r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
 	namespaceDir := filepath.Join(config.CacheDir, "maven", namespace)

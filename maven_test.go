@@ -64,6 +64,18 @@ func TestHandleMaven_NoSecurity_PutGet(t *testing.T) {
 	}
 }
 
+func TestHandleMaven_NoSecurity_HeadNamespaceProbe(t *testing.T) {
+	setupTest(t)
+
+	req := httptest.NewRequest("HEAD", "/maven/team-a/", nil)
+	res := httptest.NewRecorder()
+	handleMaven(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200 for namespace HEAD probe, got %d", res.Code)
+	}
+}
+
 func TestHandleMaven_Security(t *testing.T) {
 	setupTest(t)
 	config.NoSecurity = false
