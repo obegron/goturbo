@@ -20,12 +20,16 @@ docker-push:
 .PHONY: docker-rebuild-tag
 docker-rebuild-tag:
 	@if [ -z "$(TAG)" ]; then echo "Error: TAG is not set. Use 'make docker-rebuild-tag TAG=vX.Y.Z'"; exit 1; fi
+	git checkout $(TAG)
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(IMAGE_NAME):$(TAG) .
+	git checkout -
 
 .PHONY: docker-push-tag
 docker-push-tag:
 	@if [ -z "$(TAG)" ]; then echo "Error: TAG is not set. Use 'make docker-push-tag TAG=vX.Y.Z'"; exit 1; fi
+	git checkout $(TAG)
 	docker buildx build --platform linux/amd64,linux/arm64 --provenance=true --sbom=true -t $(IMAGE_NAME):$(TAG) . --push
+	git checkout -
 
 .PHONY: show-version
 show-version:
