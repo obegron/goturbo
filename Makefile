@@ -17,6 +17,16 @@ docker-build:
 docker-push:
 	docker buildx build --platform linux/amd64,linux/arm64 --provenance=true --sbom=true -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest . --push
 
+.PHONY: docker-rebuild-tag
+docker-rebuild-tag:
+	@if [ -z "$(TAG)" ]; then echo "Error: TAG is not set. Use 'make docker-rebuild-tag TAG=vX.Y.Z'"; exit 1; fi
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(IMAGE_NAME):$(TAG) .
+
+.PHONY: docker-push-tag
+docker-push-tag:
+	@if [ -z "$(TAG)" ]; then echo "Error: TAG is not set. Use 'make docker-push-tag TAG=vX.Y.Z'"; exit 1; fi
+	docker buildx build --platform linux/amd64,linux/arm64 --provenance=true --sbom=true -t $(IMAGE_NAME):$(TAG) . --push
+
 .PHONY: show-version
 show-version:
 	@echo $(VERSION)
@@ -33,6 +43,8 @@ help:
 	@echo "  make smoke-maven-k3d - Run Maven HTTP smoke test in a fresh k3d cluster"
 	@echo "  make docker-build - Build multi-arch Docker image"
 	@echo "  make docker-push  - Build and push to registry"
+	@echo "  make docker-rebuild-tag TAG=vX.Y.Z - Rebuild specific tag"
+	@echo "  make docker-push-tag TAG=vX.Y.Z    - Rebuild and push specific tag to registry"
 	@echo "  make show-version - Show current version"
 	@echo "  make clean        - Remove built binaries"
 
