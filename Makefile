@@ -54,4 +54,4 @@ help:
 
 .PHONY: smoke-maven-k3d
 smoke-maven-k3d:
-	./integration/maven-webdav-smoke/run-k3d.sh
+	./integration/maven-cache-smoke/run-k3d.sh

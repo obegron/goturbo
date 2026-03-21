@@ -151,7 +151,7 @@ Admin users can download a tarball of artifacts matching a prefix.
 
 ### Maven Integration Smoke Directory
 
-A standalone smoke setup lives in `integration/maven-webdav-smoke/`:
+A standalone smoke setup lives in `integration/maven-cache-smoke/`:
 
 - real Maven project (`pom.xml`, `.mvn/extensions.xml`, `.mvn/maven-build-cache-config.xml`)
 - `settings.xml` for remote server mapping
@@ -160,13 +160,13 @@ A standalone smoke setup lives in `integration/maven-webdav-smoke/`:
 Run:
 
 ```bash
-./integration/maven-webdav-smoke/run.sh
+./integration/maven-cache-smoke/run.sh
 ```
 
 k3d variant (cluster + Kubernetes `emptyDir` cache):
 
 ```bash
-./integration/maven-webdav-smoke/run-k3d.sh
+./integration/maven-cache-smoke/run-k3d.sh
 ```
 
 ### Metrics (Turbo vs Maven)

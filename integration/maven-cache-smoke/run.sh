@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SMOKE_DIR="$ROOT_DIR/integration/maven-webdav-smoke"
+SMOKE_DIR="$ROOT_DIR/integration/maven-cache-smoke"
 
 for cmd in docker mvn curl sed find; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
