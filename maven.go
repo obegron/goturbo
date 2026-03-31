@@ -112,7 +112,6 @@ func putMavenArtifact(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 
-	tmpPath := path + ".tmp"
 	var oldSize int64
 	exists := false
 	if info, err := os.Stat(path); err == nil {
@@ -120,29 +119,8 @@ func putMavenArtifact(w http.ResponseWriter, r *http.Request, path string) {
 		exists = true
 	}
 
-	f, err := os.Create(tmpPath)
+	written, err := writeAtomically(path, r.Body)
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		atomic.AddUint64(&mavenPutErrors, 1)
-		return
-	}
-
-	written, err := io.Copy(f, r.Body)
-	if err != nil {
-		f.Close()
-		_ = os.Remove(tmpPath)
-		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
-		atomic.AddUint64(&mavenPutErrors, 1)
-		return
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
-		atomic.AddUint64(&mavenPutErrors, 1)
-		return
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
 		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
 		atomic.AddUint64(&mavenPutErrors, 1)
 		return

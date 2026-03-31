@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -123,5 +125,47 @@ func TestHandleMaven_Security(t *testing.T) {
 	handleMaven(authRes, authReq)
 	if authRes.Code != http.StatusOK {
 		t.Fatalf("expected 200 with valid token, got %d", authRes.Code)
+	}
+}
+
+func TestHandleMaven_ConcurrentSamePath(t *testing.T) {
+	setupTest(t)
+
+	payloadA := bytes.Repeat([]byte("m"), 64*1024)
+	payloadB := bytes.Repeat([]byte("n"), 64*1024)
+
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	var wg sync.WaitGroup
+
+	runPut := func(body []byte) {
+		defer wg.Done()
+		req := httptest.NewRequest(http.MethodPut, "/maven/team-a/shared.bin", io.NopCloser(bytes.NewReader(body)))
+		w := httptest.NewRecorder()
+		<-start
+		handleMaven(w, req)
+		results <- w.Code
+	}
+
+	wg.Add(2)
+	go runPut(payloadA)
+	go runPut(payloadB)
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for code := range results {
+		if code != http.StatusOK {
+			t.Fatalf("expected concurrent Maven PUT to succeed, got %d", code)
+		}
+	}
+
+	storedPath := filepath.Join(config.CacheDir, "maven", "team-a", "shared.bin")
+	stored, err := os.ReadFile(storedPath)
+	if err != nil {
+		t.Fatalf("failed to read final Maven artifact: %v", err)
+	}
+	if !bytes.Equal(stored, payloadA) && !bytes.Equal(stored, payloadB) {
+		t.Fatalf("final Maven artifact content did not match either writer")
 	}
 }

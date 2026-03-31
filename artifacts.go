@@ -235,29 +235,12 @@ func putArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 		exists = true
 	}
 
-	// Create temp file first
-	tmpPath := path + ".tmp"
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		atomic.AddUint64(&turboPutErrors, 1)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
 	start := time.Now()
-	written, err := io.Copy(f, r.Body)
-	f.Close()
+	written, err := writeAtomically(path, r.Body)
 	duration := time.Since(start)
 	if err != nil {
 		atomic.AddUint64(&turboPutErrors, 1)
-		os.Remove(tmpPath)
 		http.Error(w, "Failed to write artifact", http.StatusInternalServerError)
-		return
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		atomic.AddUint64(&turboPutErrors, 1)
-		os.Remove(tmpPath)
-		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
 		return
 	}
 

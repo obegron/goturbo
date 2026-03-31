@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -166,5 +168,46 @@ func TestHandleHealth(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Errorf("Expected 200, got %d", w.Code)
+	}
+}
+
+func TestPutArtifact_ConcurrentSameHash(t *testing.T) {
+	setupTest(t)
+
+	payloadA := bytes.Repeat([]byte("a"), 64*1024)
+	payloadB := bytes.Repeat([]byte("b"), 64*1024)
+
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	var wg sync.WaitGroup
+
+	runPut := func(body []byte) {
+		defer wg.Done()
+		req := httptest.NewRequest("PUT", "/v8/artifacts/shared?teamId=test", io.NopCloser(bytes.NewReader(body)))
+		w := httptest.NewRecorder()
+		<-start
+		putArtifact(w, req, "shared")
+		results <- w.Code
+	}
+
+	wg.Add(2)
+	go runPut(payloadA)
+	go runPut(payloadB)
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for code := range results {
+		if code != 200 {
+			t.Fatalf("expected concurrent PUT to succeed, got %d", code)
+		}
+	}
+
+	stored, err := os.ReadFile(filepath.Join(config.CacheDir, "test", "shared"))
+	if err != nil {
+		t.Fatalf("failed to read final artifact: %v", err)
+	}
+	if !bytes.Equal(stored, payloadA) && !bytes.Equal(stored, payloadB) {
+		t.Fatalf("final artifact content did not match either writer")
 	}
 }
