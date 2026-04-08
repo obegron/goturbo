@@ -67,6 +67,7 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("/health", handleHealth)
 
 	if !config.DisableTurbo {
+		mux.HandleFunc("/v8/artifacts/status", handleArtifactsStatus)
 		mux.HandleFunc("/v8/artifacts/", handleArtifacts) // Handles GET and PUT
 		mux.HandleFunc("/v8/bulk", handleBulk)
 		mux.HandleFunc("/v8/artifacts/events", handleEvents)

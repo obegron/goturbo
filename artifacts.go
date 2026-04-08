@@ -42,6 +42,61 @@ func handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleArtifactsStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !config.NoSecurity && !config.NoSecurityRead {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+			return
+		}
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+				if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
+			}
+			if staticKey != nil {
+				return staticKey, nil
+			}
+			return keyManager.GetKey(token)
+		})
+		if err != nil || !token.Valid {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			log.Printf("Auth failed for GET /v8/artifacts/status: %v", err)
+			return
+		}
+
+		if config.RequiredAudience != "" {
+			audiences, err := token.Claims.GetAudience()
+			if err != nil {
+				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
+				return
+			}
+			validAud := false
+			for _, aud := range audiences {
+				if aud == config.RequiredAudience {
+					validAud = true
+					break
+				}
+			}
+			if !validAud {
+				http.Error(w, "Invalid Audience", http.StatusUnauthorized)
+				return
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	jsonEncode(w, map[string]string{"status": "enabled"})
+}
+
 func getArtifact(w http.ResponseWriter, r *http.Request, hash string) {
 	teamID := r.URL.Query().Get("teamId")
 	if teamID == "" {

@@ -15,6 +15,7 @@ func TestBuildMux_FeatureFlags(t *testing.T) {
 		disableTurbo    bool
 		disableMaven    bool
 		turboStatusCode int
+		turboProbeCode  int
 		mavenStatusCode int
 	}{
 		{
@@ -22,6 +23,7 @@ func TestBuildMux_FeatureFlags(t *testing.T) {
 			disableTurbo:    false,
 			disableMaven:    false,
 			turboStatusCode: http.StatusMethodNotAllowed,
+			turboProbeCode:  http.StatusOK,
 			mavenStatusCode: http.StatusBadRequest,
 		},
 		{
@@ -29,6 +31,7 @@ func TestBuildMux_FeatureFlags(t *testing.T) {
 			disableTurbo:    false,
 			disableMaven:    true,
 			turboStatusCode: http.StatusMethodNotAllowed,
+			turboProbeCode:  http.StatusOK,
 			mavenStatusCode: http.StatusNotFound,
 		},
 		{
@@ -36,6 +39,7 @@ func TestBuildMux_FeatureFlags(t *testing.T) {
 			disableTurbo:    true,
 			disableMaven:    false,
 			turboStatusCode: http.StatusNotFound,
+			turboProbeCode:  http.StatusNotFound,
 			mavenStatusCode: http.StatusBadRequest,
 		},
 	}
@@ -55,6 +59,13 @@ func TestBuildMux_FeatureFlags(t *testing.T) {
 			mux.ServeHTTP(turboRes, turboReq)
 			if turboRes.Code != tt.turboStatusCode {
 				t.Fatalf("turbo status = %d, want %d", turboRes.Code, tt.turboStatusCode)
+			}
+
+			turboProbeReq := httptest.NewRequest(http.MethodGet, "/v8/artifacts/status", nil)
+			turboProbeRes := httptest.NewRecorder()
+			mux.ServeHTTP(turboProbeRes, turboProbeReq)
+			if turboProbeRes.Code != tt.turboProbeCode {
+				t.Fatalf("turbo probe status = %d, want %d", turboProbeRes.Code, tt.turboProbeCode)
 			}
 
 			mavenReq := httptest.NewRequest(http.MethodGet, "/maven/", nil)
